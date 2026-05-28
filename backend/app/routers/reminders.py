@@ -31,6 +31,9 @@ async def send_due_reminders(db: Session = Depends(get_db)):
             Medication.active == True
         ).all()
 
+        # Collect all medications due now for this patient
+        due_medications = []
+
         for medication in medications:
             if not medication.times:
                 continue
@@ -41,62 +44,80 @@ async def send_due_reminders(db: Session = Depends(get_db)):
                 except:
                     continue
 
-                print(f"Checking {medication.name} at {hour}:{minute:02d} vs current {current_hour}:{current_minute:02d}")
-
-                # Check if medication is due in next 15 mins
-                med_total_minutes = hour * 60 + minute
-                now_total_minutes = current_hour * 60 + current_minute
-                diff = med_total_minutes - now_total_minutes
-
-                print(f"Diff: {diff} minutes")
+                med_total = hour * 60 + minute
+                now_total = current_hour * 60 + current_minute
+                diff = med_total - now_total
 
                 if not (0 <= diff <= 15):
                     continue
 
-                # Check if already sent reminder today
+                # Check if already sent reminder today for this med at this time
                 today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 today_end = now.replace(hour=23, minute=59, second=59, microsecond=0)
 
                 existing_log = db.query(MedicationLog).filter(
                     MedicationLog.patient_id == patient.id,
                     MedicationLog.medication_id == medication.id,
+                    MedicationLog.scheduled_time == now.replace(hour=hour, minute=minute, second=0, microsecond=0),
                     MedicationLog.created_at >= today_start,
                     MedicationLog.created_at <= today_end
                 ).first()
 
                 if existing_log:
-                    print(f"Already logged for {medication.name} today, skipping")
+                    print(f"Already logged for {medication.name} at {time_str} today, skipping")
                     continue
 
-                # Send reminder
-                message = (
-                    f"💊 Hi {patient.name}! This is your reminder to take "
-                    f"<b>{medication.name} {medication.dosage or ''}</b>.\n\n"
-                    f"Please reply with:\n"
-                    f"✅ <b>yes</b> — if you took it\n"
-                    f"❌ <b>no</b> — if you haven't yet\n"
-                    f"🤒 or tell us how you're feeling"
-                )
+                due_medications.append((medication, time_str, hour, minute))
 
-                await send_telegram_message(patient.telegram_chat_id, message)
+        if not due_medications:
+            continue
 
-                # Log as pending
-                med_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                log = MedicationLog(
-                    patient_id=patient.id,
-                    medication_id=medication.id,
-                    scheduled_time=med_time,
-                    status=MedicationStatus.pending
-                )
-                db.add(log)
-                db.commit()
+        # Build batched reminder message
+        if len(due_medications) == 1:
+            med, time_str, hour, minute = due_medications[0]
+            message = (
+                f"💊 Hi {patient.name}! Time to take your medication:\n\n"
+                f"<b>{med.name} {med.dosage or ''}</b>\n\n"
+                f"Please reply with:\n"
+                f"✅ <b>yes</b> — took it\n"
+                f"❌ <b>no</b> — haven't taken it\n"
+                f"🤒 or tell us how you're feeling"
+            )
+        else:
+            med_lines = "\n".join(
+                f"{i+1}. <b>{med.name} {med.dosage or ''}</b>"
+                for i, (med, _, _, _) in enumerate(due_medications)
+            )
+            message = (
+                f"💊 Hi {patient.name}! Time for your medications:\n\n"
+                f"{med_lines}\n\n"
+                f"Please reply with:\n"
+                f"✅ <b>all</b> — took all of them\n"
+                f"🔢 <b>1</b> or <b>2</b> — only took specific ones\n"
+                f"❌ <b>no</b> — haven't taken any\n"
+                f"🤒 or tell us how you're feeling"
+            )
 
-                results.append({
-                    "patient": patient.name,
-                    "medication": medication.name,
-                    "scheduled_time": time_str,
-                    "status": "reminder_sent"
-                })
+        await send_telegram_message(patient.telegram_chat_id, message)
+
+        # Log each due medication as pending
+        for med, time_str, hour, minute in due_medications:
+            med_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            log = MedicationLog(
+                patient_id=patient.id,
+                medication_id=med.id,
+                scheduled_time=med_time,
+                status=MedicationStatus.pending
+            )
+            db.add(log)
+            results.append({
+                "patient": patient.name,
+                "medication": med.name,
+                "scheduled_time": time_str,
+                "status": "reminder_sent"
+            })
+
+        db.commit()
 
     return {"status": "done", "results": results}
 
@@ -107,7 +128,6 @@ async def check_missed_reminders(db: Session = Depends(get_db)):
     cutoff = now - timedelta(minutes=30)
     results = []
 
-    # Find pending logs older than 30 minutes
     pending_logs = db.query(MedicationLog).filter(
         MedicationLog.status == MedicationStatus.pending,
         MedicationLog.created_at <= cutoff
@@ -122,7 +142,6 @@ async def check_missed_reminders(db: Session = Depends(get_db)):
         if not patient or not medication:
             continue
 
-        # Create alert
         alert = Alert(
             patient_id=patient.id,
             type=AlertType.no_response,
@@ -133,7 +152,6 @@ async def check_missed_reminders(db: Session = Depends(get_db)):
         db.add(alert)
         db.commit()
 
-        # Notify coordinator using relationship
         coordinator = patient.coordinator
         if coordinator and coordinator.active and coordinator.telegram_chat_id:
             await notify_coordinator(
@@ -144,7 +162,6 @@ async def check_missed_reminders(db: Session = Depends(get_db)):
                 message=alert.message
             )
 
-        # Send follow-up to patient
         if patient.telegram_chat_id:
             await send_telegram_message(
                 patient.telegram_chat_id,

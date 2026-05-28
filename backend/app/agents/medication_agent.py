@@ -13,23 +13,38 @@ You are a compassionate AI care assistant for a home care platform.
 
 When a patient sends a message in response to a medication reminder, analyze it and respond with a JSON object only. No extra text, just JSON.
 
-Determine:
-1. Whether they took their medication
+The patient may have been reminded about one or multiple medications. You will be given the list of medications they were reminded about.
+
+Determine for EACH medication:
+1. Whether they took it
 2. Any health concerns mentioned
-3. A warm, friendly reply to send back to the patient
+3. A single warm, friendly reply to send back covering all medications
 
 Always respond with this exact JSON format:
 {
-    "status": "confirmed" | "missed" | "flagged" | "unclear",
-    "concern": null or "description of concern",
+    "medications": [
+        {
+            "medication_name": "name of medication",
+            "status": "confirmed" | "missed" | "flagged" | "unclear",
+            "concern": null or "description of concern"
+        }
+    ],
     "reply": "warm message to send back to patient"
 }
 
-Rules:
-- "confirmed" → patient took medication. Examples: "yes", "took it", "done", "already took it", "took it an hour ago", "yes i took it"
-- "missed" → patient has NOT taken medication yet. Examples: "no", "not yet", "haven't taken it", "forgot", "will take later", "nope"
-- "flagged" → patient took it BUT mentioned symptoms or concerns. Examples: "took it but feeling dizzy", "yes but i have a headache"
-- "unclear" → genuinely cannot determine. Only use this if the message is completely unrelated to medication.
+Rules for interpreting replies:
+- "all" or "yes" or "took them all" → all medications confirmed
+- "no" or "none" or "not yet" → all medications missed
+- "1" or "2" etc → only that numbered medication confirmed, rest missed
+- "1 2" or "1 and 2" → those numbered medications confirmed, rest missed
+- "took metformin but not the other" → interpret naturally per medication
+- Any confirmation with a symptom → flagged for that medication
+
+Status rules:
+- "confirmed" → patient took that medication
+- "missed" → patient has NOT taken that medication yet
+- "flagged" → patient took it BUT mentioned symptoms or concerns
+- "unclear" → genuinely cannot determine
 
 IMPORTANT:
 - "not yet" = missed
@@ -43,15 +58,27 @@ Always be warm, gentle and supportive. Patients may be elderly.
 Support messages in English, Arabic, and Malayalam.
 """
 
-async def interpret_patient_reply(patient_name: str, medication_name: str, message: str) -> dict:
-    try:
-        prompt = f"""
-        Patient name: {patient_name}
-        Medication: {medication_name}
-        Patient message: "{message}"
 
-        Analyze this message and respond with JSON only.
-        """
+async def interpret_patient_reply(
+    patient_name: str,
+    medications: list[dict],  # [{"index": 1, "name": "Metformin", "dosage": "500mg"}, ...]
+    message: str
+) -> dict:
+    try:
+        med_list = "\n".join(
+            f"{m['index']}. {m['name']} {m.get('dosage', '')}".strip()
+            for m in medications
+        )
+
+        prompt = f"""
+Patient name: {patient_name}
+Medications reminded about:
+{med_list}
+
+Patient message: "{message}"
+
+Analyze this message and respond with JSON only.
+"""
 
         response = client.models.generate_content(
             model="gemini-2.5-flash-lite",
@@ -71,8 +98,11 @@ async def interpret_patient_reply(patient_name: str, medication_name: str, messa
 
     except Exception as e:
         print(f"Gemini error: {e}")
+        # Fallback — mark all as unclear
         return {
-            "status": "unclear",
-            "concern": None,
+            "medications": [
+                {"medication_name": m["name"], "status": "unclear", "concern": None}
+                for m in medications
+            ],
             "reply": f"Thank you {patient_name}, I received your message. Our care team will follow up with you shortly."
         }

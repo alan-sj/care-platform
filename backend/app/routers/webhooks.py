@@ -184,62 +184,99 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "ok"}
 
-        # Get their first active medication for context
-        medication = db.query(Medication).filter(
-            Medication.patient_id == patient.id,
-            Medication.active == True
-        ).first()
+        # Get all pending medication logs for this patient (unanswered reminders)
+        pending_logs = db.query(MedicationLog).filter(
+            MedicationLog.patient_id == patient.id,
+            MedicationLog.status == MedicationStatus.pending
+        ).all()
 
-        med_name = medication.name if medication else "your medication"
+        if not pending_logs:
+            # No pending reminders — still acknowledge the message
+            await send_telegram_message(
+                chat_id,
+                f"Thank you for your message, {patient.name}! "
+                "Our care team will follow up with you shortly. 😊"
+            )
+            return {"status": "ok"}
 
-        # Call AI agent
+        # Build medication list for the agent (deduplicated by medication_id)
+        seen = set()
+        medications_for_agent = []
+        log_map = {}  # medication_name -> log
+
+        for i, log in enumerate(pending_logs):
+            med = log.medication
+            if not med or med.id in seen:
+                continue
+            seen.add(med.id)
+            medications_for_agent.append({
+                "index": len(medications_for_agent) + 1,
+                "name": med.name,
+                "dosage": med.dosage or ""
+            })
+            log_map[med.name] = log
+
+        # Call AI agent with full medication context
         result = await interpret_patient_reply(
             patient_name=patient.name,
-            medication_name=med_name,
+            medications=medications_for_agent,
             message=text
         )
 
         print(f"Agent result: {result}")
-        print(f"Status value: '{result['status']}'")
 
-        # Log to medication_logs
-        if medication:
-            log = MedicationLog(
-                patient_id=patient.id,
-                medication_id=medication.id,
-                scheduled_time=datetime.utcnow(),
-                status=MedicationStatus[result["status"]] if result["status"] in ["confirmed", "missed", "flagged"] else MedicationStatus.pending,
-                patient_reply=text,
-                ai_interpretation=result.get("concern") or result["status"],
-                confirmed_at=datetime.utcnow() if result["status"] == "confirmed" else None
-            )
-            db.add(log)
+        # Process per-medication results
+        coordinator = patient.coordinator
+        needs_alert = False
 
-        # Create alert and notify coordinator if missed or flagged
-        if result["status"] in ["missed", "flagged"] and medication:
-            alert = Alert(
-                patient_id=patient.id,
-                type=AlertType.missed_medication if result["status"] == "missed" else AlertType.flagged,
-                severity=AlertSeverity.high if result["status"] == "missed" else AlertSeverity.medium,
-                message=result.get("concern") or f"Patient replied: {text}",
-                status=AlertStatus.open
-            )
-            db.add(alert)
-            db.commit()
+        for med_result in result.get("medications", []):
+            med_name = med_result["medication_name"]
+            status_str = med_result["status"]
+            concern = med_result.get("concern")
 
-            coordinator = patient.coordinator
-            if coordinator and coordinator.active and coordinator.telegram_chat_id:
-                await notify_coordinator(
-                    coordinator_chat_id=coordinator.telegram_chat_id,
-                    patient_name=patient.name,
-                    alert_type=alert.type.value,
-                    severity=alert.severity.value,
-                    message=alert.message
+            # Find the matching log
+            log = log_map.get(med_name)
+            if not log:
+                # Try partial match
+                for name, l in log_map.items():
+                    if med_name.lower() in name.lower() or name.lower() in med_name.lower():
+                        log = l
+                        break
+
+            if not log:
+                continue
+
+            valid_statuses = ["confirmed", "missed", "flagged"]
+            log.status = MedicationStatus[status_str] if status_str in valid_statuses else MedicationStatus.pending
+            log.patient_reply = text
+            log.ai_interpretation = concern or status_str
+            if status_str == "confirmed":
+                log.confirmed_at = datetime.utcnow()
+
+            # Create alert for missed or flagged
+            if status_str in ["missed", "flagged"]:
+                alert = Alert(
+                    patient_id=patient.id,
+                    type=AlertType.missed_medication if status_str == "missed" else AlertType.flagged,
+                    severity=AlertSeverity.high if status_str == "missed" else AlertSeverity.medium,
+                    message=concern or f"{patient.name} replied '{text}' for {log.medication.name}",
+                    status=AlertStatus.open
                 )
-        else:
-            db.commit()
+                db.add(alert)
+                needs_alert = True
 
-        # Send reply to patient
+                if coordinator and coordinator.active and coordinator.telegram_chat_id:
+                    await notify_coordinator(
+                        coordinator_chat_id=coordinator.telegram_chat_id,
+                        patient_name=patient.name,
+                        alert_type=alert.type.value,
+                        severity=alert.severity.value,
+                        message=alert.message
+                    )
+
+        db.commit()
+
+        # Send single reply to patient
         await send_telegram_message(chat_id, result["reply"])
 
     except Exception as e:
