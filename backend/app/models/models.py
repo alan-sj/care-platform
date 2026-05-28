@@ -71,6 +71,7 @@ class Patient(Base):
     coordinator_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     caregiver_id = Column(UUID(as_uuid=True), nullable=True)
     telegram_chat_id = Column(BigInteger, unique=True, nullable=True)
+    onboarding_code = Column(String, unique=True, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     coordinator = relationship("User", back_populates="patients")
@@ -135,5 +136,6 @@ class FamilyContact(Base):
     phone = Column(String)
     relation = Column(String)
     telegram_chat_id = Column(BigInteger, nullable=True)
+    onboarding_code = Column(String, unique=True, nullable=True, index=True)
 
     patient = relationship("Patient", back_populates="family_contacts")

@@ -49,10 +49,19 @@ class PatientResponse(BaseModel):
     age: Optional[int]
     language: LanguageType
     telegram_chat_id: Optional[int]
+    onboarding_code: Optional[str]
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class OnboardingLinkResponse(BaseModel):
+    patient_id: UUID
+    patient_name: str
+    onboarding_code: str
+    link: str
+    linked: bool
 
 
 # ── Medication ────────────────────────────────────────────────────────────────
@@ -126,9 +135,20 @@ class FamilyContactResponse(BaseModel):
     phone: str
     relation: Optional[str]
     telegram_chat_id: Optional[int]
+    onboarding_code: Optional[str]
 
     class Config:
         from_attributes = True
+
+
+class FamilyOnboardingLinkResponse(BaseModel):
+    contact_id: UUID
+    contact_name: str
+    patient_name: str
+    relation: Optional[str]
+    onboarding_code: str
+    link: str
+    linked: bool
 
 
 # ── Webhook ───────────────────────────────────────────────────────────────────

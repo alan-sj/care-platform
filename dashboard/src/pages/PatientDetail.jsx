@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getPatient } from '../api/patients'
+import { getPatient, getOnboardingLink } from '../api/patients'
 import { getPatientMedications, createMedication, deleteMedication, getPatientLogs } from '../api/medications'
-import { getFamilyContacts, createFamilyContact, deleteFamilyContact } from '../api/family'
+import { getFamilyContacts, createFamilyContact, deleteFamilyContact, getFamilyOnboardingLink } from '../api/family'
 
 const statusColors = {
   confirmed: '#10b981',
@@ -26,34 +26,65 @@ export default function PatientDetail() {
   const [logs, setLogs] = useState([])
   const [familyContacts, setFamilyContacts] = useState([])
   const [loading, setLoading] = useState(true)
+  const [onboarding, setOnboarding] = useState(null)
+  const [copied, setCopied] = useState(false)
+  const [familyLinks, setFamilyLinks] = useState({})
+  const [copiedContact, setCopiedContact] = useState(null)
   const [showMedForm, setShowMedForm] = useState(false)
   const [showFamilyForm, setShowFamilyForm] = useState(false)
   const [medForm, setMedForm] = useState({
     name: '', dosage: '', frequency: 'daily', times: ''
   })
   const [familyForm, setFamilyForm] = useState({
-    name: '', phone: '', relation: '', telegram_chat_id: ''
+    name: '', phone: '', relation: ''
   })
 
   useEffect(() => { fetchData() }, [id])
 
   const fetchData = async () => {
     try {
-      const [patientRes, medsRes, logsRes, familyRes] = await Promise.all([
+      const [patientRes, medsRes, logsRes, familyRes, onboardingRes] = await Promise.all([
         getPatient(id),
         getPatientMedications(id),
         getPatientLogs(id),
-        getFamilyContacts(id)
+        getFamilyContacts(id),
+        getOnboardingLink(id)
       ])
       setPatient(patientRes.data)
       setMedications(medsRes.data)
       setLogs(logsRes.data)
       setFamilyContacts(familyRes.data)
+      setOnboarding(onboardingRes.data)
+
+      // Fetch onboarding links for each family contact
+      const links = {}
+      await Promise.all(familyRes.data.map(async (contact) => {
+        try {
+          const res = await getFamilyOnboardingLink(contact.id)
+          links[contact.id] = res.data
+        } catch (e) {}
+      }))
+      setFamilyLinks(links)
     } catch (err) {
       console.error(err)
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleCopyLink = () => {
+    if (!onboarding) return
+    navigator.clipboard.writeText(onboarding.link)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleCopyFamilyLink = (contactId) => {
+    const link = familyLinks[contactId]
+    if (!link) return
+    navigator.clipboard.writeText(link.link)
+    setCopiedContact(contactId)
+    setTimeout(() => setCopiedContact(null), 2000)
   }
 
   const handleAddMedication = async () => {
@@ -88,10 +119,9 @@ export default function PatientDetail() {
         name: familyForm.name,
         phone: familyForm.phone,
         relation: familyForm.relation,
-        telegram_chat_id: familyForm.telegram_chat_id ? parseInt(familyForm.telegram_chat_id) : null
       })
       setShowFamilyForm(false)
-      setFamilyForm({ name: '', phone: '', relation: '', telegram_chat_id: '' })
+      setFamilyForm({ name: '', phone: '', relation: '' })
       fetchData()
     } catch (err) {
       console.error(err)
@@ -180,11 +210,67 @@ export default function PatientDetail() {
           <span style={{ fontSize: '14px', color: '#6b7280' }}>📞 {patient.phone}</span>
           <span style={{ fontSize: '14px', color: '#6b7280' }}>🎂 Age: {patient.age || 'N/A'}</span>
           <span style={{ fontSize: '14px', color: '#6b7280' }}>🌐 {patient.language}</span>
-          <span style={{ fontSize: '14px', color: '#6b7280' }}>
-            💬 Telegram: {patient.telegram_chat_id || 'Not linked'}
+          <span style={{ fontSize: '14px', color: patient.telegram_chat_id ? '#10b981' : '#f97316', fontWeight: '500' }}>
+            {patient.telegram_chat_id ? '🟢 Telegram Linked' : '⚠️ Telegram Not Linked'}
           </span>
         </div>
       </div>
+
+      {/* Telegram Onboarding Link */}
+      {onboarding && !onboarding.linked && (
+        <div style={{
+          ...cardStyle,
+          border: '1px solid #fbbf24',
+          backgroundColor: '#fffbeb'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <h2 style={{ fontSize: '16px', fontWeight: 'bold', color: '#92400e', marginBottom: '4px' }}>
+                📲 Connect Patient to Telegram
+              </h2>
+              <p style={{ fontSize: '13px', color: '#78350f', marginBottom: '12px' }}>
+                Share this link with the patient via WhatsApp or SMS. When they click it, their Telegram will be linked automatically.
+              </p>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                backgroundColor: 'white', borderRadius: '6px',
+                padding: '10px 14px', border: '1px solid #fde68a'
+              }}>
+                <span style={{ flex: 1, fontSize: '13px', color: '#374151', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                  {onboarding.link}
+                </span>
+                <button
+                  onClick={handleCopyLink}
+                  style={{
+                    backgroundColor: copied ? '#10b981' : '#1a56db',
+                    color: 'white', border: 'none', borderRadius: '6px',
+                    padding: '6px 14px', cursor: 'pointer', fontSize: '13px',
+                    whiteSpace: 'nowrap', flexShrink: 0
+                  }}
+                >
+                  {copied ? '✓ Copied' : 'Copy Link'}
+                </button>
+              </div>
+              <p style={{ fontSize: '12px', color: '#92400e', marginTop: '8px' }}>
+                Code: <b>{onboarding.onboarding_code}</b>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {onboarding && onboarding.linked && (
+        <div style={{
+          ...cardStyle,
+          border: '1px solid #a7f3d0',
+          backgroundColor: '#ecfdf5',
+          padding: '16px 24px'
+        }}>
+          <p style={{ fontSize: '14px', color: '#065f46', margin: 0 }}>
+            ✅ <b>Telegram connected.</b> Reminders and alerts are being delivered to this patient.
+          </p>
+        </div>
+      )}
 
       {/* Today's Medication Logs */}
       <div style={cardStyle}>
@@ -321,7 +407,6 @@ export default function PatientDetail() {
                 { key: 'name', label: 'Name', placeholder: 'e.g. Sarah Thomas' },
                 { key: 'phone', label: 'Phone', placeholder: '+919876543210' },
                 { key: 'relation', label: 'Relation', placeholder: 'e.g. daughter' },
-                { key: 'telegram_chat_id', label: 'Telegram Chat ID', placeholder: 'e.g. 123456789' },
               ].map(field => (
                 <div key={field.key}>
                   <label style={{ fontSize: '13px', color: '#374151', display: 'block', marginBottom: '4px' }}>
@@ -347,22 +432,61 @@ export default function PatientDetail() {
         {familyContacts.length === 0 ? (
           <p style={{ color: '#6b7280', fontSize: '14px' }}>No family contacts added yet.</p>
         ) : (
-          familyContacts.map(contact => (
-            <div key={contact.id} style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              padding: '12px 16px', backgroundColor: '#f8fafc',
-              borderRadius: '6px', marginBottom: '8px', border: '1px solid #e5e7eb'
-            }}>
-              <div>
-                <span style={{ fontWeight: 'bold', color: '#1e3a5f' }}>{contact.name}</span>
-                <span style={{ color: '#6b7280', fontSize: '13px', marginLeft: '8px' }}>
-                  {contact.relation} · {contact.phone}
-                  {contact.telegram_chat_id && ` · Telegram: ${contact.telegram_chat_id}`}
-                </span>
+          familyContacts.map(contact => {
+            const fl = familyLinks[contact.id]
+            return (
+              <div key={contact.id} style={{
+                backgroundColor: '#f8fafc', borderRadius: '6px',
+                marginBottom: '8px', border: '1px solid #e5e7eb', overflow: 'hidden'
+              }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '12px 16px'
+                }}>
+                  <div>
+                    <span style={{ fontWeight: 'bold', color: '#1e3a5f' }}>{contact.name}</span>
+                    <span style={{ color: '#6b7280', fontSize: '13px', marginLeft: '8px' }}>
+                      {contact.relation} · {contact.phone}
+                    </span>
+                    <span style={{
+                      marginLeft: '10px', fontSize: '12px', fontWeight: '500',
+                      padding: '2px 8px', borderRadius: '12px',
+                      backgroundColor: contact.telegram_chat_id ? '#d1fae5' : '#fef3c7',
+                      color: contact.telegram_chat_id ? '#065f46' : '#92400e'
+                    }}>
+                      {contact.telegram_chat_id ? '🟢 Linked' : '⚠️ Not linked'}
+                    </span>
+                  </div>
+                  <button onClick={() => handleDeleteFamily(contact.id)} style={btnDanger}>Remove</button>
+                </div>
+                {fl && !fl.linked && (
+                  <div style={{
+                    borderTop: '1px solid #fde68a', backgroundColor: '#fffbeb',
+                    padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '8px'
+                  }}>
+                    <span style={{ fontSize: '12px', color: '#92400e', flexShrink: 0 }}>📲 Share link:</span>
+                    <span style={{
+                      flex: 1, fontSize: '12px', color: '#374151',
+                      fontFamily: 'monospace', wordBreak: 'break-all'
+                    }}>
+                      {fl.link}
+                    </span>
+                    <button
+                      onClick={() => handleCopyFamilyLink(contact.id)}
+                      style={{
+                        backgroundColor: copiedContact === contact.id ? '#10b981' : '#1a56db',
+                        color: 'white', border: 'none', borderRadius: '6px',
+                        padding: '4px 12px', cursor: 'pointer', fontSize: '12px',
+                        whiteSpace: 'nowrap', flexShrink: 0
+                      }}
+                    >
+                      {copiedContact === contact.id ? '✓ Copied' : 'Copy'}
+                    </button>
+                  </div>
+                )}
               </div>
-              <button onClick={() => handleDeleteFamily(contact.id)} style={btnDanger}>Remove</button>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
 

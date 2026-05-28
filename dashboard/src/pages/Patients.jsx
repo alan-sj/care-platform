@@ -7,7 +7,7 @@ export default function Patients() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({
-    name: '', phone: '', age: '', language: 'en', telegram_chat_id: ''
+    name: '', phone: '', age: '', language: 'en'
   })
 
   useEffect(() => { fetchPatients() }, [])
@@ -28,10 +28,9 @@ export default function Patients() {
       await createPatient({
         ...form,
         age: form.age ? parseInt(form.age) : null,
-        telegram_chat_id: form.telegram_chat_id ? parseInt(form.telegram_chat_id) : null
       })
       setShowForm(false)
-      setForm({ name: '', phone: '', age: '', language: 'en', telegram_chat_id: '' })
+      setForm({ name: '', phone: '', age: '', language: 'en' })
       fetchPatients()
     } catch (err) {
       console.error(err)
@@ -65,7 +64,6 @@ export default function Patients() {
         </button>
       </div>
 
-      {/* Add Patient Form */}
       {showForm && (
         <div style={{
           backgroundColor: 'white',
@@ -74,13 +72,15 @@ export default function Patients() {
           marginBottom: '24px',
           boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
         }}>
-          <h3 style={{ marginBottom: '16px', color: '#1e3a5f' }}>New Patient</h3>
+          <h3 style={{ marginBottom: '4px', color: '#1e3a5f' }}>New Patient</h3>
+          <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '16px' }}>
+            A unique onboarding link will be generated automatically. Share it with the patient to connect their Telegram.
+          </p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             {[
               { key: 'name', label: 'Full Name', type: 'text', required: true },
               { key: 'phone', label: 'Phone', type: 'text', required: true },
               { key: 'age', label: 'Age', type: 'number' },
-              { key: 'telegram_chat_id', label: 'Telegram Chat ID', type: 'number' },
             ].map(field => (
               <div key={field.key}>
                 <label style={{ fontSize: '13px', color: '#374151', display: 'block', marginBottom: '4px' }}>
@@ -153,7 +153,6 @@ export default function Patients() {
         </div>
       )}
 
-      {/* Patient List */}
       {patients.length === 0 ? (
         <div style={{
           backgroundColor: 'white',

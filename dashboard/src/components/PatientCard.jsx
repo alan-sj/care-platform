@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom'
 
 export default function PatientCard({ patient }) {
   const navigate = useNavigate()
+  const linked = !!patient.telegram_chat_id
 
   return (
     <div
@@ -29,7 +30,19 @@ export default function PatientCard({ patient }) {
           📞 {patient.phone} · Age: {patient.age || 'N/A'} · Lang: {patient.language}
         </div>
       </div>
-      <div style={{ color: '#9ca3af', fontSize: '20px' }}>→</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <span style={{
+          fontSize: '12px',
+          fontWeight: '500',
+          padding: '3px 10px',
+          borderRadius: '12px',
+          backgroundColor: linked ? '#d1fae5' : '#fef3c7',
+          color: linked ? '#065f46' : '#92400e'
+        }}>
+          {linked ? '🟢 Linked' : '⚠️ Not linked'}
+        </span>
+        <div style={{ color: '#9ca3af', fontSize: '20px' }}>→</div>
+      </div>
     </div>
   )
 }

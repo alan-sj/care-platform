@@ -8,3 +8,6 @@ export const createFamilyContact = (data) =>
 
 export const deleteFamilyContact = (id) =>
   client.delete(`/family/${id}`)
+
+export const getFamilyOnboardingLink = (contactId) =>
+  client.get(`/family/contact/${contactId}/onboarding-link`)
