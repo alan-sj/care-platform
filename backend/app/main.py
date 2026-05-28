@@ -1,9 +1,9 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine
 from app.models import models
-from app.routers import patients, medications, alerts, webhooks, users, summaries, reminders
+from app.routers import patients, medications, alerts, webhooks, users, summaries, reminders, family
 
-# Create all tables if they don't exist
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -12,7 +12,15 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# Register routers
+# CORS — allow React dashboard
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(patients.router)
 app.include_router(medications.router)
 app.include_router(alerts.router)
@@ -20,6 +28,8 @@ app.include_router(webhooks.router)
 app.include_router(users.router)
 app.include_router(summaries.router)
 app.include_router(reminders.router)
+app.include_router(family.router)
+
 
 @app.get("/")
 def root():
@@ -29,3 +39,4 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+

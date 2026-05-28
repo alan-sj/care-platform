@@ -4,5 +4,7 @@ __pycache__/
 *.pyc
 backend.zip
 set_webhook.sh
-start.sh
-dashboard
+Archive.zip
+
+node_modules/
+dist/

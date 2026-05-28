@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.models import Medication
-from app.schemas.schemas import MedicationCreate, MedicationResponse
+from app.models.models import Medication, MedicationLog
+from app.schemas.schemas import MedicationCreate, MedicationResponse, MedicationLogResponse
 from typing import List
+from datetime import datetime, date
 import uuid
 
 router = APIRouter(prefix="/medications", tags=["Medications"])
@@ -24,6 +25,16 @@ def get_patient_medications(patient_id: uuid.UUID, db: Session = Depends(get_db)
         Medication.patient_id == patient_id,
         Medication.active == True
     ).all()
+
+
+@router.get("/logs/{patient_id}", response_model=List[MedicationLogResponse])
+def get_patient_logs(patient_id: uuid.UUID, db: Session = Depends(get_db)):
+    today = date.today()
+    return db.query(MedicationLog).filter(
+        MedicationLog.patient_id == patient_id,
+        MedicationLog.created_at >= datetime.combine(today, datetime.min.time()),
+        MedicationLog.created_at <= datetime.combine(today, datetime.max.time())
+    ).order_by(MedicationLog.created_at.desc()).all()
 
 
 @router.delete("/{medication_id}")
