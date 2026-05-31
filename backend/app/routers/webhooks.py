@@ -1,15 +1,26 @@
+"""
+Telegram webhook router.
+Handles:
+  - /start deep-link onboarding (patient + family)
+  - Medication reminder replies  → medication_agent
+  - Wellness check-in replies    → wellness_agent
+  - Unrecognised messages        → friendly fallback
+"""
+
 from fastapi import APIRouter, Request, Depends
 from sqlalchemy.orm import Session
+from datetime import datetime, date
+
 from app.database import get_db
 from app.models.models import (
     Patient, Medication, MedicationLog, Alert, FamilyContact,
-    MedicationStatus, AlertType, AlertSeverity, AlertStatus
+    MedicationStatus, AlertType, AlertSeverity, AlertStatus,
 )
 from app.agents.medication_agent import interpret_patient_reply
 from app.services.notification_service import send_telegram_message, notify_coordinator
+
 import os
 from dotenv import load_dotenv
-from datetime import datetime
 
 load_dotenv()
 
@@ -18,8 +29,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
+# ── /start onboarding ─────────────────────────────────────────────────────────
+
 async def handle_start_command(chat_id: int, text: str, sender: str, db: Session):
-    """Handle /start commands — supports deep link onboarding via /start CARE-XXXX or FAM-XXXX."""
     parts = text.strip().split(maxsplit=1)
     param = parts[1].strip() if len(parts) > 1 else ""
 
@@ -27,36 +39,21 @@ async def handle_start_command(chat_id: int, text: str, sender: str, db: Session
         await send_telegram_message(
             chat_id,
             "👋 Welcome to Care Platform!\n\n"
-            "To link your account, please use the onboarding link sent to you by your care coordinator."
+            "To link your account, please use the onboarding link sent by your care coordinator."
         )
         return
 
-    # ── Patient onboarding ──────────────────────────────────────────────────
+    # Patient onboarding
     if param.startswith("CARE-"):
         patient = db.query(Patient).filter(Patient.onboarding_code == param).first()
-
         if not patient:
-            await send_telegram_message(
-                chat_id,
-                "❌ This onboarding link is invalid or has expired.\n"
-                "Please contact your care coordinator for a new link."
-            )
+            await send_telegram_message(chat_id, "❌ Invalid onboarding link. Please contact your care coordinator.")
             return
-
         if patient.telegram_chat_id and patient.telegram_chat_id != chat_id:
-            await send_telegram_message(
-                chat_id,
-                "⚠️ This onboarding link has already been used.\n"
-                "Please contact your care coordinator if you need help."
-            )
+            await send_telegram_message(chat_id, "⚠️ This link has already been used.")
             return
-
         if patient.telegram_chat_id == chat_id:
-            await send_telegram_message(
-                chat_id,
-                f"✅ You're already connected, {patient.name}!\n"
-                "You'll receive your medication reminders here."
-            )
+            await send_telegram_message(chat_id, f"✅ You're already connected, {patient.name}!")
             return
 
         patient.telegram_chat_id = chat_id
@@ -67,17 +64,12 @@ async def handle_start_command(chat_id: int, text: str, sender: str, db: Session
             "en": (
                 f"✅ Welcome, <b>{patient.name}</b>!\n\n"
                 "You're now connected to your care platform. "
-                "You'll receive medication reminders here and can reply to confirm or report how you're feeling.\n\n"
-                "💊 We'll remind you when it's time to take your medications."
+                "You'll receive medication reminders and daily wellness check-ins here.\n\n"
+                "💊 We'll remind you when it's time to take your medications.\n"
+                "🌟 Every morning we'll check in on how you're feeling."
             ),
-            "ar": (
-                f"✅ مرحباً، <b>{patient.name}</b>!\n\n"
-                "تم ربط حسابك بنجاح. ستصلك تذكيرات الدواء هنا ويمكنك الرد لتأكيد تناوله أو الإبلاغ عن حالتك."
-            ),
-            "ml": (
-                f"✅ സ്വാഗതം, <b>{patient.name}</b>!\n\n"
-                "നിങ്ങളുടെ അക്കൗണ്ട് ബന്ധിപ്പിച്ചു. മരുന്ന് ഓർമ്മപ്പെടുത്തലുകൾ ഇവിടെ ലഭിക്കും."
-            ),
+            "ar": f"✅ مرحباً، <b>{patient.name}</b>!\n\nتم ربط حسابك بنجاح.",
+            "ml": f"✅ സ്വാഗതം, <b>{patient.name}</b>!\n\nനിങ്ങളുടെ അക്കൗണ്ട് ബന്ധിപ്പിച്ചു.",
         }
         await send_telegram_message(chat_id, greetings.get(lang, greetings["en"]))
 
@@ -85,97 +77,90 @@ async def handle_start_command(chat_id: int, text: str, sender: str, db: Session
         if coordinator and coordinator.active and coordinator.telegram_chat_id:
             await send_telegram_message(
                 coordinator.telegram_chat_id,
-                f"🔗 <b>{patient.name}</b> has successfully linked their Telegram account and is now connected to the care platform."
+                f"🔗 <b>{patient.name}</b> has successfully linked their Telegram account."
             )
         return
 
-    # ── Family contact onboarding ───────────────────────────────────────────
+    # Family onboarding
     if param.startswith("FAM-"):
         contact = db.query(FamilyContact).filter(FamilyContact.onboarding_code == param).first()
-
         if not contact:
-            await send_telegram_message(
-                chat_id,
-                "❌ This onboarding link is invalid or has expired.\n"
-                "Please contact the care coordinator for a new link."
-            )
+            await send_telegram_message(chat_id, "❌ Invalid onboarding link.")
             return
-
         if contact.telegram_chat_id and contact.telegram_chat_id != chat_id:
-            await send_telegram_message(
-                chat_id,
-                "⚠️ This onboarding link has already been used.\n"
-                "Please contact the care coordinator if you need help."
-            )
+            await send_telegram_message(chat_id, "⚠️ This link has already been used.")
             return
-
         if contact.telegram_chat_id == chat_id:
             patient = db.query(Patient).filter(Patient.id == contact.patient_id).first()
-            await send_telegram_message(
-                chat_id,
-                f"✅ You're already connected as {contact.relation or 'family contact'} of <b>{patient.name if patient else 'your patient'}</b>!"
-            )
+            await send_telegram_message(chat_id, f"✅ Already connected as {contact.relation} of {patient.name if patient else 'your patient'}!")
             return
 
         contact.telegram_chat_id = chat_id
         db.commit()
 
-        patient = db.query(Patient).filter(Patient.id == contact.patient_id).first()
-        patient_name = patient.name if patient else "your patient"
+        patient  = db.query(Patient).filter(Patient.id == contact.patient_id).first()
         relation = contact.relation or "family contact"
-
         await send_telegram_message(
             chat_id,
             f"✅ Welcome, <b>{contact.name}</b>!\n\n"
-            f"You're now connected as <b>{patient_name}</b>'s {relation}. "
-            f"You'll receive health updates and summaries here."
+            f"You're now connected as <b>{patient.name if patient else 'your patient'}</b>'s {relation}. "
+            "You'll receive health updates and daily summaries here."
         )
-
-        # Notify coordinator
-        if patient and patient.coordinator and patient.coordinator.active and patient.coordinator.telegram_chat_id:
-            await send_telegram_message(
-                patient.coordinator.telegram_chat_id,
-                f"🔗 <b>{contact.name}</b> ({relation} of {patient_name}) has successfully linked their Telegram account."
-            )
         return
 
-    # Unknown code format
-    await send_telegram_message(
-        chat_id,
-        "❌ This onboarding link is invalid.\n"
-        "Please contact your care coordinator for a new link."
-    )
+    await send_telegram_message(chat_id, "❌ Invalid onboarding link.")
 
+
+# ── Message routing helpers ───────────────────────────────────────────────────
+
+def _has_pending_wellness(patient_id, db: Session) -> bool:
+    """Check if patient has an unanswered wellness check-in today."""
+    try:
+        from app.routers.wellness import WellnessLog
+        today = date.today()
+        return db.query(WellnessLog).filter(
+            WellnessLog.patient_id    == patient_id,
+            WellnessLog.status        == "pending",
+            WellnessLog.check_in_date >= datetime.combine(today, datetime.min.time()),
+        ).first() is not None
+    except Exception:
+        return False
+
+
+def _has_pending_medication(patient_id, db: Session) -> bool:
+    """Check if patient has unanswered medication reminders."""
+    return db.query(MedicationLog).filter(
+        MedicationLog.patient_id == patient_id,
+        MedicationLog.status     == MedicationStatus.pending,
+    ).first() is not None
+
+
+# ── Main webhook ──────────────────────────────────────────────────────────────
 
 @router.post("/telegram")
 async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
     try:
-        data = await request.json()
-
+        data    = await request.json()
         message = data.get("message", {})
         chat_id = message.get("chat", {}).get("id")
-        text = message.get("text", "")
-        sender = message.get("from", {}).get("first_name", "Patient")
+        text    = message.get("text", "")
+        sender  = message.get("from", {}).get("first_name", "Patient")
 
         if not chat_id or not text:
             return {"status": "ok"}
 
         print(f"Message from {sender} ({chat_id}): {text}")
 
-        # Handle /start (deep link onboarding)
+        # /start — onboarding
         if text.startswith("/start"):
             await handle_start_command(chat_id, text, sender, db)
             return {"status": "ok"}
 
-        # Ignore other bot commands
         if text.startswith("/"):
             return {"status": "ok"}
 
-        # Find patient by telegram chat_id
-        patient = db.query(Patient).filter(
-            Patient.telegram_chat_id == chat_id
-        ).first()
-
+        # Find patient
+        patient = db.query(Patient).filter(Patient.telegram_chat_id == chat_id).first()
         if not patient:
             await send_telegram_message(
                 chat_id,
@@ -184,100 +169,96 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "ok"}
 
-        # Get all pending medication logs for this patient (unanswered reminders)
-        pending_logs = db.query(MedicationLog).filter(
-            MedicationLog.patient_id == patient.id,
-            MedicationLog.status == MedicationStatus.pending
-        ).all()
-
-        if not pending_logs:
-            # No pending reminders — still acknowledge the message
-            await send_telegram_message(
-                chat_id,
-                f"Thank you for your message, {patient.name}! "
-                "Our care team will follow up with you shortly. 😊"
+        # ── Route: wellness check-in reply ────────────────────────────────────
+        if _has_pending_wellness(patient.id, db):
+            from app.routers.wellness import handle_wellness_response
+            await handle_wellness_response(
+                patient_telegram_id=chat_id,
+                message=text,
+                db=db,
             )
             return {"status": "ok"}
 
-        # Build medication list for the agent (deduplicated by medication_id)
-        seen = set()
-        medications_for_agent = []
-        log_map = {}  # medication_name -> log
+        # ── Route: medication reminder reply ──────────────────────────────────
+        if _has_pending_medication(patient.id, db):
+            pending_logs = db.query(MedicationLog).filter(
+                MedicationLog.patient_id == patient.id,
+                MedicationLog.status     == MedicationStatus.pending,
+            ).all()
 
-        for i, log in enumerate(pending_logs):
-            med = log.medication
-            if not med or med.id in seen:
-                continue
-            seen.add(med.id)
-            medications_for_agent.append({
-                "index": len(medications_for_agent) + 1,
-                "name": med.name,
-                "dosage": med.dosage or ""
-            })
-            log_map[med.name] = log
+            seen     = set()
+            meds_for_agent = []
+            log_map  = {}
 
-        # Call AI agent with full medication context
-        result = await interpret_patient_reply(
-            patient_name=patient.name,
-            medications=medications_for_agent,
-            message=text
-        )
+            for log in pending_logs:
+                med = log.medication
+                if not med or med.id in seen:
+                    continue
+                seen.add(med.id)
+                meds_for_agent.append({
+                    "index":  len(meds_for_agent) + 1,
+                    "name":   med.name,
+                    "dosage": med.dosage or "",
+                })
+                log_map[med.name] = log
 
-        print(f"Agent result: {result}")
+            result = await interpret_patient_reply(
+                patient_name=patient.name,
+                medications=meds_for_agent,
+                message=text,
+            )
 
-        # Process per-medication results
-        coordinator = patient.coordinator
-        needs_alert = False
+            coordinator = patient.coordinator
 
-        for med_result in result.get("medications", []):
-            med_name = med_result["medication_name"]
-            status_str = med_result["status"]
-            concern = med_result.get("concern")
+            for med_result in result.get("medications", []):
+                med_name   = med_result["medication_name"]
+                status_str = med_result["status"]
+                concern    = med_result.get("concern")
 
-            # Find the matching log
-            log = log_map.get(med_name)
-            if not log:
-                # Try partial match
-                for name, l in log_map.items():
-                    if med_name.lower() in name.lower() or name.lower() in med_name.lower():
-                        log = l
-                        break
+                log = log_map.get(med_name)
+                if not log:
+                    for name, l in log_map.items():
+                        if med_name.lower() in name.lower() or name.lower() in med_name.lower():
+                            log = l
+                            break
+                if not log:
+                    continue
 
-            if not log:
-                continue
+                valid = ["confirmed", "missed", "flagged"]
+                log.status           = MedicationStatus[status_str] if status_str in valid else MedicationStatus.pending
+                log.patient_reply    = text
+                log.ai_interpretation = concern or status_str
+                if status_str == "confirmed":
+                    log.confirmed_at = datetime.utcnow()
 
-            valid_statuses = ["confirmed", "missed", "flagged"]
-            log.status = MedicationStatus[status_str] if status_str in valid_statuses else MedicationStatus.pending
-            log.patient_reply = text
-            log.ai_interpretation = concern or status_str
-            if status_str == "confirmed":
-                log.confirmed_at = datetime.utcnow()
-
-            # Create alert for missed or flagged
-            if status_str in ["missed", "flagged"]:
-                alert = Alert(
-                    patient_id=patient.id,
-                    type=AlertType.missed_medication if status_str == "missed" else AlertType.flagged,
-                    severity=AlertSeverity.high if status_str == "missed" else AlertSeverity.medium,
-                    message=concern or f"{patient.name} replied '{text}' for {log.medication.name}",
-                    status=AlertStatus.open
-                )
-                db.add(alert)
-                needs_alert = True
-
-                if coordinator and coordinator.active and coordinator.telegram_chat_id:
-                    await notify_coordinator(
-                        coordinator_chat_id=coordinator.telegram_chat_id,
-                        patient_name=patient.name,
-                        alert_type=alert.type.value,
-                        severity=alert.severity.value,
-                        message=alert.message
+                if status_str in ["missed", "flagged"]:
+                    alert = Alert(
+                        patient_id=patient.id,
+                        type=AlertType.missed_medication if status_str == "missed" else AlertType.flagged,
+                        severity=AlertSeverity.high if status_str == "missed" else AlertSeverity.medium,
+                        message=concern or f"{patient.name} replied '{text}' for {log.medication.name}",
+                        status=AlertStatus.open,
                     )
+                    db.add(alert)
+                    if coordinator and coordinator.active and coordinator.telegram_chat_id:
+                        await notify_coordinator(
+                            coordinator_chat_id=coordinator.telegram_chat_id,
+                            patient_name=patient.name,
+                            alert_type=alert.type.value,
+                            severity=alert.severity.value,
+                            message=alert.message,
+                        )
 
-        db.commit()
+            db.commit()
+            await send_telegram_message(chat_id, result["reply"])
+            return {"status": "ok"}
 
-        # Send single reply to patient
-        await send_telegram_message(chat_id, result["reply"])
+        # ── Fallback: no pending task ─────────────────────────────────────────
+        await send_telegram_message(
+            chat_id,
+            f"Thank you for your message, {patient.name}! "
+            "Our care team will follow up with you shortly. 😊"
+        )
 
     except Exception as e:
         print(f"Webhook error: {e}")
