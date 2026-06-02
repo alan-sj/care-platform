@@ -26,8 +26,8 @@ COPY backend/app ./app
 # Copy compiled frontend from Stage 1 into backend's serving directory
 COPY --from=frontend-builder /dashboard/dist ./dist
 
-# Create a folder for persistent database storage (for SQLite)
-RUN mkdir -p /app/data
+# Create a folder for persistent database storage (for SQLite) and set ownership for Hugging Face user 1000
+RUN mkdir -p /app/data && chown -R 1000:1000 /app/data
 
 # Default port for Hugging Face Spaces is 7860
 EXPOSE 7860
