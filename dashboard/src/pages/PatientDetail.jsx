@@ -1,38 +1,118 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getPatient, getOnboardingLink } from '../api/patients'
+import { getPatient, getOnboardingLink, updatePatient } from '../api/patients'
 import { getPatientMedications, createMedication, deleteMedication, getPatientLogs } from '../api/medications'
 import { getFamilyContacts, createFamilyContact, deleteFamilyContact, getFamilyOnboardingLink } from '../api/family'
 import { getLatestWellnessScore } from '../api/wellness'
-import { getPatientRiskStatus } from '../api/emergency'
+import { getPatientRiskStatus, triggerAssessment } from '../api/emergency'
 import { submitVisitNote, getPatientNotes } from '../api/copilot'
+import { getPatientAlerts, acknowledgeAlert, resolveAlert } from '../api/alerts'
+import * as Icons from '../components/Icons'
 
-const statusColors = { confirmed: '#10b981', missed: '#ef4444', flagged: '#f97316', pending: '#6b7280' }
-const statusEmoji  = { confirmed: '✅', missed: '❌', flagged: '🟠', pending: '⏳' }
+const statusColors = { confirmed: 'var(--success-color)', missed: 'var(--error-color)', flagged: 'var(--warning-color)', pending: 'var(--neutral-muted)' }
 
 const riskLevelConfig = {
-  none:     { color: '#16a34a', bg: '#f0fdf4', label: 'No Risk',  icon: '✅' },
-  low:      { color: '#ca8a04', bg: '#fefce8', label: 'Low Risk', icon: '🟡' },
-  medium:   { color: '#ea580c', bg: '#fff7ed', label: 'Medium',   icon: '🟠' },
-  high:     { color: '#dc2626', bg: '#fef2f2', label: 'High',     icon: '🔴' },
-  critical: { color: '#7c3aed', bg: '#f5f3ff', label: 'Critical', icon: '🚨' },
+  none:     { color: 'var(--success-color)', bg: 'var(--success-bg)', label: 'No Risk',  icon: <Icons.Activity size={14} /> },
+  low:      { color: 'var(--warning-color)', bg: 'var(--warning-bg)', label: 'Low Risk', icon: <Icons.AlertTriangle size={14} /> },
+  medium:   { color: 'var(--warning-color)', bg: 'var(--warning-bg)', label: 'Medium',   icon: <Icons.AlertTriangle size={14} /> },
+  high:     { color: 'var(--error-color)', bg: 'var(--error-bg)', label: 'High',     icon: <Icons.AlertTriangle size={14} /> },
+  critical: { color: 'var(--error-color)', bg: 'var(--error-bg)', label: 'Critical', icon: <Icons.AlertTriangle size={14} /> },
+}
+
+const statusIcon = {
+  confirmed: <Icons.Activity size={13} style={{ color: 'var(--success-color)' }} />,
+  missed: <Icons.AlertTriangle size={13} style={{ color: 'var(--error-color)' }} />,
+  flagged: <Icons.AlertTriangle size={13} style={{ color: 'var(--warning-color)' }} />,
+  pending: <Icons.Calendar size={13} style={{ color: 'var(--neutral-muted)' }} />
 }
 
 const scoreColor = (score) => {
-  if (!score) return { color: '#9ca3af', label: '—' }
-  if (score >= 8) return { color: '#16a34a', label: `${score}/10 — Good` }
-  if (score >= 6) return { color: '#ca8a04', label: `${score}/10 — Fair` }
-  if (score >= 4) return { color: '#ea580c', label: `${score}/10 — Low` }
-  return { color: '#dc2626', label: `${score}/10 — Critical` }
+  if (!score) return { color: 'var(--neutral-muted)', label: '—' }
+  if (score >= 8) return { color: 'var(--success-color)', label: `${score}/10 — Good` }
+  if (score >= 6) return { color: 'var(--warning-color)', label: `${score}/10 — Fair` }
+  if (score >= 4) return { color: 'var(--warning-color)', label: `${score}/10 — Low` }
+  return { color: 'var(--error-color)', label: `${score}/10 — Critical` }
 }
 
 function WellnessCard({ wellness }) {
-  if (!wellness || wellness.score === null) {
+  const [showDetails, setShowDetails] = useState(false)
+
+  if (!wellness) {
     return (
       <div style={{
-        backgroundColor: '#f9fafb', borderRadius: '8px',
-        padding: '14px 16px', border: '1px solid #f1f5f9',
-        textAlign: 'center', color: '#9ca3af', fontSize: '13px'
+        backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)',
+        padding: '14px 16px', border: '1px solid var(--neutral-border)',
+        textAlign: 'center', color: 'var(--neutral-muted)', fontSize: '13px'
+      }}>
+        No wellness check-in data yet.
+      </div>
+    )
+  }
+
+  if (wellness.score === null || wellness.score === undefined) {
+    if (wellness.concerns && (wellness.concerns.includes("Error") || wellness.concerns.includes("failed"))) {
+      let friendlyMsg = "The AI Wellness service is temporarily unavailable. Please try again shortly."
+      if (wellness.concerns.includes("429") || wellness.concerns.includes("quota")) {
+        friendlyMsg = "AI service quota exceeded. Daily wellness scores are temporarily suspended. Please contact support or try again later."
+      } else if (wellness.concerns.includes("503") || wellness.concerns.includes("busy") || wellness.concerns.includes("demand")) {
+        friendlyMsg = "The AI Wellness service is temporarily overloaded. Scores will automatically recalculate shortly."
+      }
+
+      return (
+        <div style={{
+          backgroundColor: 'var(--error-bg)', borderRadius: 'var(--radius-md)',
+          padding: '14px 16px', border: '1px solid var(--error-border)',
+          color: 'var(--error-color)', fontSize: '13px', display: 'flex', flexDirection: 'column', gap: '8px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '800', fontSize: '14px' }}>
+            <Icons.AlertTriangle size={14} style={{ color: 'var(--error-color)' }} />
+            Wellness Analysis Offline
+          </div>
+          <span style={{ fontSize: '12px', opacity: 0.95, lineHeight: '1.4' }}>{friendlyMsg}</span>
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            style={{
+              alignSelf: 'flex-start',
+              background: 'none',
+              border: 'none',
+              color: 'var(--error-color)',
+              textDecoration: 'underline',
+              fontSize: '11px',
+              padding: 0,
+              cursor: 'pointer',
+              fontWeight: '600',
+              opacity: 0.8
+            }}
+          >
+            {showDetails ? 'Hide Technical Details' : 'Show Technical Details'}
+          </button>
+          {showDetails && (
+            <pre style={{
+              margin: '4px 0 0 0',
+              padding: '8px',
+              backgroundColor: 'rgba(0, 0, 0, 0.04)',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '10px',
+              fontFamily: 'monospace',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              maxHeight: '120px',
+              overflowY: 'auto',
+              border: '1px solid rgba(0, 0, 0, 0.08)',
+              color: 'var(--error-color)',
+              lineHeight: '1.3'
+            }}>
+              {wellness.concerns}
+            </pre>
+          )}
+        </div>
+      )
+    }
+    return (
+      <div style={{
+        backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)',
+        padding: '14px 16px', border: '1px solid var(--neutral-border)',
+        textAlign: 'center', color: 'var(--neutral-muted)', fontSize: '13px'
       }}>
         No wellness check-in data yet.
       </div>
@@ -40,30 +120,30 @@ function WellnessCard({ wellness }) {
   }
   const sc = scoreColor(wellness.score)
   return (
-    <div style={{ backgroundColor: '#f8fafc', borderRadius: '8px', padding: '14px 16px', border: '1px solid #f1f5f9' }}>
+    <div style={{ backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)', padding: '14px 16px', border: '1px solid var(--neutral-border)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-        <span style={{ fontSize: '22px', fontWeight: '700', color: sc.color }}>{sc.label}</span>
+        <span style={{ fontSize: '22px', fontWeight: '800', color: sc.color }}>{sc.label}</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
         {[
           ['Mood', wellness.mood],
           ['Pain', wellness.pain],
           ['Eating', wellness.eating],
           ['Sleep', wellness.sleep],
         ].map(([label, value]) => (
-          <div key={label} style={{ backgroundColor: 'white', borderRadius: '6px', padding: '6px 10px', border: '1px solid #e5e7eb' }}>
-            <div style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
-            <div style={{ fontSize: '13px', color: '#374151', fontWeight: '500' }}>{value || '—'}</div>
+          <div key={label} style={{ backgroundColor: 'var(--card-bg)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', border: '1px solid var(--neutral-border)' }}>
+            <div style={{ fontSize: '9px', color: 'var(--neutral-muted)', marginBottom: '2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+            <div style={{ fontSize: '13px', color: 'var(--neutral-dark)', fontWeight: '600' }}>{value || '—'}</div>
           </div>
         ))}
       </div>
       {wellness.concerns && (
-        <div style={{ marginTop: '8px', fontSize: '12px', color: '#92400e', backgroundColor: '#fffbeb', borderRadius: '6px', padding: '6px 10px', borderLeft: '3px solid #fbbf24' }}>
-          ⚠️ {wellness.concerns}
+        <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--warning-color)', backgroundColor: 'var(--warning-bg)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', borderLeft: '3px solid var(--warning-color)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Icons.AlertTriangle size={12} style={{ flexShrink: 0 }} /> {wellness.concerns}
         </div>
       )}
       {wellness.checked_at && (
-        <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '6px' }}>
+        <div style={{ fontSize: '11px', color: 'var(--neutral-muted)', marginTop: '6px' }}>
           Last checked: {new Date(wellness.checked_at).toLocaleString()}
         </div>
       )}
@@ -93,27 +173,28 @@ function VisitNoteForm({ patientId, onSubmitted }) {
     }
   }
 
-  const riskColors = { none: '#16a34a', low: '#ca8a04', medium: '#ea580c', high: '#dc2626' }
+  const riskColors = { none: 'var(--success-color)', low: 'var(--warning-color)', medium: 'var(--warning-color)', high: 'var(--error-color)' }
 
   return (
     <div style={{ marginTop: '20px' }}>
       {!open ? (
         <button
           onClick={() => setOpen(true)}
+          className="btn-premium"
           style={{
-            width: '100%', padding: '12px', backgroundColor: '#1e3a5f',
-            color: 'white', border: 'none', borderRadius: '8px',
-            cursor: 'pointer', fontSize: '14px', fontWeight: '500'
+            width: '100%', padding: '12px', backgroundColor: 'var(--primary-color)',
+            color: '#ffffff', borderRadius: 'var(--radius-md)',
+            fontSize: '14px', fontWeight: '700', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px'
           }}
         >
-          📝 Submit Visit Note
+          <Icons.FileText size={16} /> Write Visit Note
         </button>
       ) : (
-        <div style={{ backgroundColor: '#f8fafc', borderRadius: '8px', padding: '16px', border: '1px solid #e5e7eb' }}>
-          <div style={{ fontSize: '14px', fontWeight: '600', color: '#1e3a5f', marginBottom: '8px' }}>
+        <div style={{ backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)', padding: '16px', border: '1px solid var(--neutral-border)' }}>
+          <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--neutral-dark)', marginBottom: '8px' }}>
             New Visit Note
           </div>
-          <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '10px', margin: '0 0 10px' }}>
+          <p style={{ fontSize: '12px', color: 'var(--neutral-muted)', marginBottom: '10px', margin: '0 0 10px' }}>
             Describe the visit naturally — vitals, observations, medications given, any concerns. The AI will structure it automatically.
           </p>
           <textarea
@@ -122,29 +203,29 @@ function VisitNoteForm({ patientId, onSubmitted }) {
             onChange={e => setNote(e.target.value)}
             style={{
               width: '100%', padding: '10px 12px', fontSize: '13px',
-              border: '1px solid #d1d5db', borderRadius: '6px',
+              border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--card-bg)', color: 'var(--neutral-text)',
               resize: 'vertical', minHeight: '100px', boxSizing: 'border-box',
-              fontFamily: 'inherit', lineHeight: '1.5'
+              fontFamily: 'inherit', lineHeight: '1.5', outline: 'none'
             }}
           />
           <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
             <button
               onClick={handleSubmit}
               disabled={submitting || !note.trim()}
+              className="btn-premium btn-success"
               style={{
-                backgroundColor: submitting ? '#94a3b8' : '#1e3a5f',
-                color: 'white', border: 'none', borderRadius: '6px',
-                padding: '8px 20px', cursor: submitting ? 'not-allowed' : 'pointer',
-                fontSize: '13px', fontWeight: '500'
+                padding: '8px 20px', cursor: submitting || !note.trim() ? 'not-allowed' : 'pointer',
+                fontSize: '13px', fontWeight: '700'
               }}
             >
               {submitting ? 'Processing...' : 'Submit & Analyse'}
             </button>
             <button
               onClick={() => { setOpen(false); setNote(''); setResult(null) }}
+              className="btn-primary-outline"
               style={{
-                backgroundColor: 'transparent', color: '#6b7280',
-                border: '1px solid #e5e7eb', borderRadius: '6px',
+                borderRadius: 'var(--radius-md)',
                 padding: '8px 14px', cursor: 'pointer', fontSize: '13px'
               }}
             >
@@ -153,23 +234,23 @@ function VisitNoteForm({ patientId, onSubmitted }) {
           </div>
 
           {result && (
-            <div style={{ marginTop: '14px', padding: '12px 14px', backgroundColor: 'white', borderRadius: '8px', border: `1px solid ${result.risk_level !== 'none' ? '#fecaca' : '#bbf7d0'}` }}>
-              <div style={{ fontSize: '13px', fontWeight: '600', color: riskColors[result.risk_level] || '#374151', marginBottom: '6px' }}>
-                ✓ Processed — Risk: {result.risk_level?.toUpperCase() || 'NONE'}
+            <div style={{ marginTop: '14px', padding: '12px 14px', backgroundColor: 'var(--card-bg)', borderRadius: 'var(--radius-md)', border: `1px solid ${result.risk_level !== 'none' ? 'var(--error-color)' : 'var(--success-color)'}` }}>
+              <div style={{ fontSize: '13px', fontWeight: '700', color: riskColors[result.risk_level] || 'var(--neutral-dark)', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Icons.Activity size={14} /> Processed — Risk: {result.risk_level?.toUpperCase() || 'NONE'}
               </div>
               {result.visit_summary && (
-                <p style={{ fontSize: '12px', color: '#374151', margin: '0 0 6px', lineHeight: '1.5' }}>
+                <p style={{ fontSize: '12px', color: 'var(--neutral-text)', margin: '0 0 6px', lineHeight: '1.5' }}>
                   {result.visit_summary}
                 </p>
               )}
               {result.risk_flags?.length > 0 && (
-                <div style={{ fontSize: '12px', color: '#dc2626' }}>
-                  ⚠️ Flags: {result.risk_flags.join(', ')}
+                <div style={{ fontSize: '12px', color: 'var(--error-color)', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Icons.AlertTriangle size={12} style={{ flexShrink: 0 }} /> Flags: {result.risk_flags.join(', ')}
                 </div>
               )}
               {result.follow_up_needed && result.follow_up_note && (
-                <div style={{ fontSize: '12px', color: '#1d4ed8', marginTop: '4px' }}>
-                  📌 {result.follow_up_note}
+                <div style={{ fontSize: '12px', color: 'var(--info-color)', marginTop: '4px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Icons.Calendar size={12} style={{ flexShrink: 0 }} /> {result.follow_up_note}
                 </div>
               )}
             </div>
@@ -191,14 +272,21 @@ export default function PatientDetail() {
   const [wellness, setWellness]   = useState(null)
   const [riskStatus, setRiskStatus] = useState(null)
   const [recentNotes, setRecentNotes] = useState([])
+  const [alerts, setAlerts]       = useState([])
+  const [activeTab, setActiveTab] = useState('health')
+  const [showEditForm, setShowEditForm] = useState(false)
+  const [editForm, setEditForm] = useState({
+    name: '', phone: '', age: '', language: 'en', clinical_conditions: '', baseline_bp: '', timezone: 'Asia/Kolkata'
+  })
   const [loading, setLoading]     = useState(true)
   const [copied, setCopied]       = useState(false)
   const [familyLinks, setFamilyLinks] = useState({})
   const [copiedContact, setCopiedContact] = useState(null)
   const [showMedForm, setShowMedForm]   = useState(false)
   const [showFamilyForm, setShowFamilyForm] = useState(false)
-  const [medForm, setMedForm]   = useState({ name: '', dosage: '', frequency: 'daily', times: '' })
+  const [medForm, setMedForm]   = useState({ name: '', dosage: '', frequency: 'daily', times: ['09:00'] })
   const [familyForm, setFamilyForm] = useState({ name: '', phone: '', relation: '' })
+  const [scanningRisk, setScanningRisk] = useState(false)
 
   useEffect(() => { fetchData() }, [id])
 
@@ -217,17 +305,19 @@ export default function PatientDetail() {
       setFamilyContacts(familyRes.data)
       setOnboarding(onboardingRes.data)
 
-      const [wellRes, riskRes, notesRes, fLinks] = await Promise.all([
+      const [wellRes, riskRes, notesRes, alertsRes, fLinks] = await Promise.all([
         getLatestWellnessScore(id).catch(() => ({ data: null })),
         getPatientRiskStatus(id).catch(() => ({ data: null })),
         getPatientNotes(id).catch(() => ({ data: [] })),
+        getPatientAlerts(id).catch(() => ({ data: [] })),
         Promise.all(familyRes.data.map(c =>
           getFamilyOnboardingLink(c.id).then(r => [c.id, r.data]).catch(() => null)
         )),
       ])
       setWellness(wellRes.data)
       setRiskStatus(riskRes.data)
-      setRecentNotes((notesRes.data || []).slice(0, 3))
+      setRecentNotes((notesRes.data || []).slice(0, 5))
+      setAlerts(alertsRes.data || [])
       const links = {}
       fLinks.filter(Boolean).forEach(([cid, data]) => { links[cid] = data })
       setFamilyLinks(links)
@@ -245,6 +335,23 @@ export default function PatientDetail() {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const handleEmergencyScan = async () => {
+    setScanningRisk(true)
+    try {
+      await triggerAssessment(id)
+      const [riskRes, alertsRes] = await Promise.all([
+        getPatientRiskStatus(id).catch(() => ({ data: null })),
+        getPatientAlerts(id).catch(() => ({ data: [] })),
+      ])
+      setRiskStatus(riskRes.data)
+      setAlerts(alertsRes.data || [])
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setScanningRisk(false)
+    }
+  }
+
   const handleCopyFamilyLink = (contactId) => {
     const link = familyLinks[contactId]
     if (!link) return
@@ -258,11 +365,11 @@ export default function PatientDetail() {
       await createMedication({
         patient_id: id, name: medForm.name, dosage: medForm.dosage,
         frequency: medForm.frequency,
-        times: medForm.times.split(',').map(t => t.trim()),
+        times: medForm.times.filter(t => t.trim() !== ''),
         active: true
       })
       setShowMedForm(false)
-      setMedForm({ name: '', dosage: '', frequency: 'daily', times: '' })
+      setMedForm({ name: '', dosage: '', frequency: 'daily', times: ['09:00'] })
       fetchData()
     } catch { alert('Error adding medication') }
   }
@@ -288,300 +395,794 @@ export default function PatientDetail() {
     fetchData()
   }
 
-  if (loading) return <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Loading...</div>
-  if (!patient) return <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Patient not found</div>
+  const handleAcknowledgeAlert = async (alertId) => {
+    try {
+      await acknowledgeAlert(alertId)
+      fetchData()
+    } catch { alert('Error acknowledging alert') }
+  }
+
+  const handleResolveAlert = async (alertId) => {
+    try {
+      await resolveAlert(alertId)
+      fetchData()
+    } catch { alert('Error resolving alert') }
+  }
+
+  const handleUpdatePatient = async () => {
+    try {
+      if (!editForm.name.trim() || !editForm.phone.trim()) {
+        alert('Name and Phone are required')
+        return
+      }
+      await updatePatient(id, {
+        ...editForm,
+        age: editForm.age ? parseInt(editForm.age) : null,
+      })
+      setShowEditForm(false)
+      fetchData()
+    } catch (err) {
+      console.error(err)
+      alert('Error updating patient profile')
+    }
+  }
+
+  if (loading) return <div className="card-premium" style={{ margin: '40px', textAlign: 'center', color: 'var(--neutral-muted)' }}>Loading...</div>
+  if (!patient) return <div className="card-premium" style={{ margin: '40px', textAlign: 'center', color: 'var(--neutral-muted)' }}>Patient not found</div>
 
   const rc = riskLevelConfig[riskStatus?.risk_level || 'none']
-  const card  = { backgroundColor: 'white', borderRadius: '8px', padding: '24px', marginBottom: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.07)' }
-  const btnP  = { backgroundColor: '#1a56db', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', fontSize: '13px' }
-  const btnS  = { backgroundColor: '#f3f4f6', color: '#374151', border: 'none', borderRadius: '6px', padding: '8px 20px', cursor: 'pointer' }
-  const btnD  = { backgroundColor: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '12px' }
-  const input = { width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px', boxSizing: 'border-box' }
+  const inputStyle = {
+    width: '100%',
+    padding: '10px 12px',
+    border: '1px solid var(--neutral-border)',
+    borderRadius: 'var(--radius-md)',
+    fontSize: '14px',
+    backgroundColor: 'var(--card-bg)',
+    color: 'var(--neutral-text)',
+    boxSizing: 'border-box',
+    outline: 'none'
+  }
 
   return (
-    <div style={{ padding: '32px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
-      <button onClick={() => navigate('/patients')} style={{ backgroundColor: 'transparent', border: 'none', color: '#1a56db', cursor: 'pointer', fontSize: '14px', marginBottom: '16px', padding: 0 }}>
-        ← Back to Patients
+    <div className="page-container">
+      {/* Executive Breadcrumb Navigation */}
+      <button
+        onClick={() => navigate('/patients')}
+        style={{
+          backgroundColor: 'transparent', border: 'none',
+          color: 'var(--primary-color)', cursor: 'pointer',
+          fontSize: '14px', marginBottom: '20px', padding: 0,
+          fontWeight: '700', display: 'flex', alignItems: 'center', gap: '4px'
+        }}
+      >
+        <Icons.Activity size={14} style={{ transform: 'rotate(90deg)' }} /> ← Back to Patients List
       </button>
 
-      {/* Patient Header with risk badge */}
-      <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+      {/* Patient Header Card */}
+      <div className="card-premium" style={{ marginBottom: '20px' }}>
+        {showEditForm ? (
           <div>
-            <h1 style={{ fontSize: '24px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '8px' }}>
-              👤 {patient.name}
-            </h1>
-            <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '14px', color: '#6b7280' }}>📞 {patient.phone}</span>
-              <span style={{ fontSize: '14px', color: '#6b7280' }}>🎂 Age: {patient.age || 'N/A'}</span>
-              <span style={{ fontSize: '14px', color: '#6b7280' }}>🌐 {patient.language}</span>
-              <span style={{ fontSize: '14px', color: patient.telegram_chat_id ? '#10b981' : '#f97316', fontWeight: '500' }}>
-                {patient.telegram_chat_id ? '🟢 Telegram Linked' : '⚠️ Not Linked'}
-              </span>
+            <h3 style={{ fontSize: '18px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '16px' }}>Edit Patient Profile</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-muted)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Full Name *</label>
+                <input type="text" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-muted)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Phone *</label>
+                <input type="text" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-muted)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Age</label>
+                <input type="number" value={editForm.age} onChange={e => setEditForm({ ...editForm, age: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-muted)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Language</label>
+                <select value={editForm.language} onChange={e => setEditForm({ ...editForm, language: e.target.value })} style={inputStyle}>
+                  <option value="en">English</option>
+                  <option value="ar">Arabic</option>
+                  <option value="ml">Malayalam</option>
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-muted)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Baseline BP (e.g. 120/80)</label>
+                <input type="text" value={editForm.baseline_bp} onChange={e => setEditForm({ ...editForm, baseline_bp: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-muted)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Timezone</label>
+                <input type="text" value={editForm.timezone} onChange={e => setEditForm({ ...editForm, timezone: e.target.value })} style={inputStyle} />
+              </div>
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-muted)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Clinical Conditions</label>
+                <textarea 
+                  value={editForm.clinical_conditions} 
+                  onChange={e => setEditForm({ ...editForm, clinical_conditions: e.target.value })} 
+                  style={{ ...inputStyle, minHeight: '60px', fontFamily: 'inherit', resize: 'vertical' }} 
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                onClick={handleUpdatePatient} 
+                className="btn-premium btn-success" 
+                style={{ padding: '8px 20px', fontWeight: '700', cursor: 'pointer' }}
+              >
+                Save Changes
+              </button>
+              <button 
+                onClick={() => setShowEditForm(false)} 
+                className="btn-primary-outline" 
+                style={{ borderRadius: 'var(--radius-md)', padding: '8px 14px', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
             </div>
           </div>
-          {/* Risk + wellness snapshot */}
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-            <div style={{
-              backgroundColor: rc.bg, borderRadius: '8px', padding: '10px 16px',
-              border: `1px solid`, borderColor: rc.color + '40', textAlign: 'center'
-            }}>
-              <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>Risk Status</div>
-              <div style={{ fontSize: '14px', fontWeight: '600', color: rc.color }}>
-                {rc.icon} {rc.label}
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <h1 style={{ fontSize: '24px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '12px', margin: 0 }}>
+                <Icons.User size={24} style={{ color: 'var(--neutral-muted)' }} /> 
+                {patient.name}
+              </h1>
+              <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center', marginTop: '8px' }}>
+                <span style={{ fontSize: '13px', color: 'var(--neutral-muted)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icons.Phone size={13} /> {patient.phone}</span>
+                <span style={{ fontSize: '13px', color: 'var(--neutral-muted)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icons.Calendar size={13} /> Age: {patient.age || 'N/A'}</span>
+                <span style={{ fontSize: '13px', color: 'var(--neutral-muted)', display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Icons.Globe size={13} /> {patient.language?.toUpperCase()}</span>
               </div>
-              {riskStatus?.open_alerts > 0 && (
-                <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '2px' }}>
-                  {riskStatus.open_alerts} open alert{riskStatus.open_alerts !== 1 ? 's' : ''}
+            </div>
+            
+            <button
+              onClick={() => {
+                setEditForm({
+                  name: patient.name,
+                  phone: patient.phone,
+                  age: patient.age || '',
+                  language: patient.language || 'en',
+                  clinical_conditions: patient.clinical_conditions || '',
+                  baseline_bp: patient.baseline_bp || '',
+                  timezone: patient.timezone || 'Asia/Kolkata'
+                });
+                setShowEditForm(true);
+              }}
+              className="btn-primary-outline"
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                borderRadius: 'var(--radius-md)',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontWeight: '700',
+              }}
+            >
+              ✏️ Edit Profile
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* 🚀 Hero Summary Bar (3 Executive Cards) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+        
+        {/* Card 1: Wellness Status */}
+        {(() => {
+          const sc = scoreColor(wellness?.score);
+          const hasError = wellness?.concerns && (wellness.concerns.includes("Error") || wellness.concerns.includes("failed"));
+          return (
+            <div className="card-premium" style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '16px', 
+              padding: '16px 20px', 
+              marginBottom: 0,
+              borderLeft: `4px solid ${hasError ? 'var(--error-color)' : sc.color}`
+            }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: hasError ? 'var(--error-bg)' : 'var(--neutral-bg)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: hasError ? 'var(--error-color)' : sc.color
+              }}>
+                <Icons.Heart size={20} />
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--neutral-muted)', textTransform: 'uppercase', fontWeight: '700', letterSpacing: '0.5px' }}>Wellness Score</div>
+                <div style={{ fontSize: '18px', fontWeight: '800', color: 'var(--neutral-dark)' }}>
+                  {hasError ? (
+                    <span style={{ fontSize: '14px', color: 'var(--error-color)' }}>Offline</span>
+                  ) : (
+                    sc.label
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Card 2: Clinical Risk Level */}
+        <div className="card-premium" style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'space-between',
+          gap: '16px', 
+          padding: '16px 20px', 
+          marginBottom: 0,
+          borderLeft: `4px solid ${rc.color}`
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: 'var(--radius-sm)',
+              backgroundColor: rc.bg,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: rc.color
+            }}>
+              <Icons.AlertTriangle size={20} />
+            </div>
+            <div>
+              <div style={{ fontSize: '11px', color: 'var(--neutral-muted)', textTransform: 'uppercase', fontWeight: '700', letterSpacing: '0.5px' }}>Clinical Risk</div>
+              <div style={{ fontSize: '18px', fontWeight: '800', color: 'var(--neutral-dark)' }}>
+                {rc.label}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleEmergencyScan}
+            disabled={scanningRisk}
+            className="btn-premium btn-primary-outline"
+            style={{ padding: '6px 12px', fontSize: '12px', flexShrink: 0 }}
+          >
+            {scanningRisk ? 'Scanning...' : 'Scan Risk'}
+          </button>
+        </div>
+
+        {/* Card 3: Today's Medication Adherence */}
+        {(() => {
+          const totalMeds = logs.length;
+          const confirmedMeds = logs.filter(l => l.status === 'confirmed').length;
+          const adherencePercent = totalMeds > 0 ? Math.round((confirmedMeds / totalMeds) * 100) : null;
+          return (
+            <div className="card-premium" style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '16px', 
+              padding: '16px 20px', 
+              marginBottom: 0,
+              borderLeft: '4px solid var(--primary-color)'
+            }}>
+              <div style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'var(--neutral-bg)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--primary-color)'
+              }}>
+                <Icons.Pill size={20} />
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--neutral-muted)', textTransform: 'uppercase', fontWeight: '700', letterSpacing: '0.5px' }}>Today's Adherence</div>
+                <div style={{ fontSize: '18px', fontWeight: '800', color: 'var(--neutral-dark)' }}>
+                  {adherencePercent !== null ? `${adherencePercent}%` : 'No logs today'}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+      </div>
+
+      {/* 🚀 Interactive Navigation Tabs */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '8px', 
+        borderBottom: '1px solid var(--neutral-border)', 
+        marginBottom: '24px', 
+        paddingBottom: '2px' 
+      }}>
+        {[
+          { id: 'health', label: '🩺 Health & Vitals' },
+          { id: 'visits', label: '📋 Visit Logs & Notes' },
+          { id: 'profile', label: '⚙️ Profile & Management' }
+        ].map(tab => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                background: 'none',
+                border: 'none',
+                borderBottom: active ? '3px solid var(--primary-color)' : '3px solid transparent',
+                color: active ? 'var(--primary-color)' : 'var(--neutral-muted)',
+                fontWeight: active ? '800' : '600',
+                padding: '10px 16px',
+                fontSize: '14px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                marginBottom: '-3px'
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 🚀 Tab 1: Health & Vitals Workspace */}
+      {activeTab === 'health' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px', alignItems: 'flex-start' }}>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Wellness Assessment Grid Card */}
+            <div className="card-premium" style={{ marginBottom: 0 }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 14px 0' }}>
+                <Icons.Heart size={16} /> Wellness Check-in Assessment
+              </h2>
+              <WellnessCard wellness={wellness} />
+            </div>
+
+            {/* Today's Activity Medication Logs list */}
+            <div className="card-premium" style={{ marginBottom: 0 }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 14px 0' }}>
+                <Icons.Activity size={16} /> Today's Medication Logs
+              </h2>
+              {logs.length === 0 ? (
+                <p style={{ color: 'var(--neutral-muted)', fontSize: '13px', margin: 0 }}>No logs generated yet today.</p>
+              ) : (
+                logs.map(log => (
+                  <div key={log.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-sm)', marginBottom: '8px', border: '1px solid var(--neutral-border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                      {statusIcon[log.status]}
+                      <span style={{ fontWeight: '700', color: statusColors[log.status], fontSize: '11px', flexShrink: 0 }}>
+                        {log.status.toUpperCase()}
+                      </span>
+                      <span style={{ fontSize: '13px', color: 'var(--neutral-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {log.patient_reply ? `"${log.patient_reply}"` : 'No reply'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--neutral-muted)', flexShrink: 0, marginLeft: '8px' }}>
+                      {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Active Alerts List */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="card-premium" style={{ marginBottom: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Icons.Bell size={16} /> Active Alerts & Flags
+                </h2>
+                {alerts.length > 0 && (
+                  <span style={{ fontSize: '11px', color: 'var(--neutral-muted)', fontWeight: '600' }}>
+                    {alerts.filter(a => a.status !== 'resolved').length} open
+                  </span>
+                )}
+              </div>
+              
+              {alerts.filter(a => a.status !== 'resolved').length === 0 ? (
+                <p style={{ color: 'var(--neutral-muted)', fontSize: '13px', margin: 0 }}>No active alerts or flags.</p>
+              ) : (
+                <div style={{ display: 'grid', gap: '8px', maxHeight: '350px', overflowY: 'auto' }}>
+                  {alerts.filter(a => a.status !== 'resolved').map(alert => {
+                    const statusColors = {
+                      open: 'var(--error-color)',
+                      acknowledged: 'var(--warning-color)',
+                      resolved: 'var(--success-color)'
+                    }
+                    const statusBgs = {
+                      open: 'var(--error-bg)',
+                      acknowledged: 'var(--warning-bg)',
+                      resolved: 'var(--success-bg)'
+                    }
+                    return (
+                      <div key={alert.id} style={{
+                        backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-sm)',
+                        padding: '10px 12px', border: '1px solid var(--neutral-border)',
+                        display: 'flex', flexDirection: 'column', gap: '6px'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span className="badge-premium" style={{
+                            backgroundColor: statusBgs[alert.status],
+                            color: statusColors[alert.status],
+                            borderColor: statusColors[alert.status],
+                            fontSize: '9px',
+                            textTransform: 'uppercase',
+                            fontWeight: '700',
+                            padding: '1px 6px'
+                          }}>
+                            {alert.status}
+                          </span>
+                          <span style={{ fontSize: '10px', color: 'var(--neutral-muted)' }}>
+                            {new Date(alert.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <p style={{ fontSize: '12px', color: 'var(--neutral-dark)', margin: 0, fontWeight: '600', lineHeight: '1.4' }}>
+                          {alert.message}
+                        </p>
+                        
+                        {alert.status !== 'resolved' && (
+                          <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                            {alert.status === 'open' && (
+                              <button
+                                onClick={() => handleAcknowledgeAlert(alert.id)}
+                                className="btn-premium"
+                                style={{ padding: '3px 8px', fontSize: '10px', backgroundColor: 'var(--warning-color)', color: '#ffffff', cursor: 'pointer', flex: 1 }}
+                              >
+                                Ack
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleResolveAlert(alert.id)}
+                              className="btn-premium btn-success"
+                              style={{ padding: '3px 8px', fontSize: '10px', fontWeight: '700', cursor: 'pointer', flex: 1 }}
+                            >
+                              Resolve
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
-            {wellness?.score !== null && wellness?.score !== undefined && (
-              <div style={{
-                backgroundColor: '#f8fafc', borderRadius: '8px', padding: '10px 16px',
-                border: '1px solid #e5e7eb', textAlign: 'center'
-              }}>
-                <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '2px' }}>Wellness</div>
-                <div style={{ fontSize: '18px', fontWeight: '700', color: scoreColor(wellness.score).color }}>
-                  {wellness.score}/10
+          </div>
+
+        </div>
+      )}
+
+      {/* 🚀 Tab 2: Visit Logs & Notes Workspace */}
+      {activeTab === 'visits' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr', gap: '24px', alignItems: 'flex-start' }}>
+          {/* Timeline Feed of Visit Notes */}
+          <div className="card-premium" style={{ marginBottom: 0 }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 16px 0' }}>
+              <Icons.FileText size={16} /> Coordinator Care Logs Feed
+            </h2>
+
+            {recentNotes.length === 0 ? (
+              <p style={{ color: 'var(--neutral-muted)', fontSize: '13px', margin: 0 }}>No visit notes recorded yet.</p>
+            ) : (
+              recentNotes.map(note => {
+                const rc2 = riskLevelConfig[note.risk_level] || riskLevelConfig.none
+                let risks = []
+                try { risks = JSON.parse(note.risk_flags || '[]') } catch {}
+                return (
+                  <div key={note.id} style={{
+                    backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)',
+                    padding: '14px 16px', marginBottom: '12px',
+                    border: `1px solid ${note.risk_level !== 'none' ? rc2.color : 'var(--neutral-border)'}`
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span className={`badge-premium ${note.risk_level === 'high' || note.risk_level === 'critical' ? 'badge-danger' : note.risk_level === 'none' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '11px', padding: '2px 8px' }}>
+                          {rc2.icon} {rc2.label}
+                        </span>
+                        {note.follow_up_needed && (
+                          <span className="badge-premium badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: '2px', fontSize: '11px', padding: '2px 8px' }}>
+                            <Icons.Calendar size={11} /> Follow-up Required
+                          </span>
+                        )}
+                      </div>
+                      <span style={{ fontSize: '11px', color: 'var(--neutral-muted)' }}>
+                        {new Date(note.visit_date).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '14px', color: 'var(--neutral-text)', margin: '6px 0', lineHeight: '1.5' }}>
+                      {note.visit_summary || 'No summary.'}
+                    </p>
+                    {risks.length > 0 && (
+                      <div style={{ fontSize: '12px', color: 'var(--error-color)', marginTop: '6px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Icons.AlertTriangle size={12} style={{ flexShrink: 0 }} /> Risks: {risks.join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+
+          {/* Form to submit visit note */}
+          <div className="card-premium" style={{ marginBottom: 0 }}>
+            <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 14px 0' }}>
+              <Icons.FileText size={16} /> Add Coordinator Entry
+            </h2>
+            <VisitNoteForm patientId={id} onSubmitted={fetchData} />
+          </div>
+        </div>
+      )}
+
+      {/* 🚀 Tab 3: Profile & Management Workspace */}
+      {activeTab === 'profile' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px', alignItems: 'flex-start' }}>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            
+            {/* Clinical Baseline Context Displays */}
+            <div className="card-premium" style={{ marginBottom: 0 }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 14px 0' }}>
+                <Icons.Activity size={16} /> Clinical Baseline Context
+              </h2>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)', padding: '16px', border: '1px solid var(--neutral-border)' }}>
+                <div>
+                  <div style={{ fontSize: '10px', color: 'var(--neutral-muted)', textTransform: 'uppercase', fontWeight: '700', marginBottom: '2px' }}>Baseline BP</div>
+                  <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--neutral-dark)' }}>{patient.baseline_bp || 'Not set'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: '10px', color: 'var(--neutral-muted)', textTransform: 'uppercase', fontWeight: '700', marginBottom: '2px' }}>Local Timezone</div>
+                  <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--neutral-dark)' }}>{patient.timezone || 'Asia/Kolkata'}</div>
+                </div>
+                <div style={{ gridColumn: 'span 2' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--neutral-muted)', textTransform: 'uppercase', fontWeight: '700', marginBottom: '2px' }}>Clinical Conditions</div>
+                  <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--neutral-dark)', lineHeight: '1.4' }}>{patient.clinical_conditions || 'None registered'}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Active prescription schedule scheduler */}
+            <div className="card-premium" style={{ marginBottom: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Icons.Pill size={16} /> Active Prescription Scheduler
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowMedForm(!showMedForm);
+                    setMedForm({ name: '', dosage: '', frequency: 'daily', times: ['09:00'] });
+                  }}
+                  className="btn-premium"
+                  style={{ backgroundColor: 'var(--primary-color)', color: '#ffffff', padding: '4px 12px', fontSize: '12px' }}
+                >
+                  {showMedForm ? 'Cancel' : '+ Add Medication'}
+                </button>
+              </div>
+
+              {showMedForm && (
+                <div style={{ backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)', padding: '16px', marginBottom: '16px', border: '1px solid var(--neutral-border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                    {[
+                      { key: 'name', label: 'Medication Name', placeholder: 'e.g. Metformin' },
+                      { key: 'dosage', label: 'Dosage', placeholder: 'e.g. 500mg' },
+                    ].map(field => (
+                      <div key={field.key}>
+                        <label style={{ fontSize: '12px', color: 'var(--neutral-text)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>{field.label}</label>
+                        <input type="text" placeholder={field.placeholder} value={medForm[field.key]} onChange={e => setMedForm({ ...medForm, [field.key]: e.target.value })} style={inputStyle} />
+                      </div>
+                    ))}
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'var(--neutral-text)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>Frequency</label>
+                      <select value={medForm.frequency} onChange={e => setMedForm({ ...medForm, frequency: e.target.value })} style={inputStyle}>
+                        <option value="daily">Daily</option>
+                        <option value="twice_daily">Twice Daily</option>
+                        <option value="weekly">Weekly</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ fontSize: '12px', color: 'var(--neutral-text)', display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+                      Scheduled Times ({patient?.timezone || 'Asia/Kolkata'})
+                    </label>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+                      {medForm.times.map((time, idx) => (
+                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: 'var(--card-bg)', border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)', padding: '4px 8px' }}>
+                          <input 
+                            type="time" 
+                            value={time} 
+                            onChange={e => {
+                              const newTimes = [...medForm.times];
+                              newTimes[idx] = e.target.value;
+                              setMedForm({ ...medForm, times: newTimes });
+                            }} 
+                            style={{
+                              border: 'none',
+                              background: 'transparent',
+                              color: 'var(--neutral-dark)',
+                              fontSize: '12px',
+                              outline: 'none',
+                              fontFamily: 'inherit',
+                              cursor: 'pointer'
+                            }} 
+                          />
+                          {medForm.times.length > 1 && (
+                            <button 
+                              type="button" 
+                              onClick={() => {
+                                const newTimes = medForm.times.filter((_, i) => i !== idx);
+                                setMedForm({ ...medForm, times: newTimes });
+                              }} 
+                              style={{
+                                border: 'none',
+                                background: 'transparent',
+                                color: 'var(--error-color)',
+                                cursor: 'pointer',
+                                padding: '0 2px',
+                                fontSize: '12px',
+                                fontWeight: 'bold'
+                              }}
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button 
+                        type="button" 
+                        onClick={() => setMedForm({ ...medForm, times: [...medForm.times, '09:00'] })} 
+                        className="btn-primary-outline" 
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '12px',
+                          borderRadius: 'var(--radius-md)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          height: '28px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        + Add Time
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={handleAddMedication} className="btn-premium btn-success" style={{ padding: '6px 16px', fontSize: '13px', fontWeight: '700' }}>Save</button>
+                    <button onClick={() => setShowMedForm(false)} className="btn-primary-outline" style={{ borderRadius: 'var(--radius-md)', padding: '6px 12px', fontSize: '13px' }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {medications.length === 0 ? (
+                <p style={{ color: 'var(--neutral-muted)', fontSize: '13px', margin: 0 }}>No medications added yet.</p>
+              ) : (
+                medications.map(med => (
+                  <div key={med.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-sm)', marginBottom: '8px', border: '1px solid var(--neutral-border)' }}>
+                    <div>
+                      <span style={{ fontWeight: '700', color: 'var(--neutral-dark)', fontSize: '13px' }}>{med.name}</span>
+                      <span style={{ color: 'var(--neutral-muted)', fontSize: '12px', marginLeft: '8px' }}>{med.dosage} · {med.frequency} · {med.times?.join(', ')}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className={`badge-premium ${med.active ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '10px', padding: '1px 6px' }}>
+                        {med.active ? 'Active' : 'Inactive'}
+                      </span>
+                      <button onClick={() => handleDeleteMedication(med.id)} className="btn-premium btn-danger" style={{ padding: '3px 8px', fontSize: '11px' }}>Delete</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Onboarding connect Telegram connection */}
+            {onboarding && !onboarding.linked && (
+              <div className="card-premium" style={{ border: '1px solid var(--warning-color)', backgroundColor: 'var(--warning-bg)', padding: '16px', marginBottom: 0 }}>
+                <h2 style={{ fontSize: '14px', fontWeight: '800', color: 'var(--warning-color)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px', margin: '0 0 4px 0' }}>
+                  <Icons.Phone size={14} /> Connect Telegram
+                </h2>
+                <p style={{ fontSize: '12px', color: 'var(--neutral-muted)', margin: '0 0 10px 0', lineHeight: '1.4' }}>
+                  Share this onboarding link with the patient to connect their Telegram.
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: 'var(--card-bg)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', border: '1px solid var(--neutral-border)' }}>
+                  <span style={{ flex: 1, fontSize: '11px', color: 'var(--neutral-text)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {onboarding.link}
+                  </span>
+                  <button
+                    onClick={handleCopyLink}
+                    className="btn-premium"
+                    style={{
+                      backgroundColor: copied ? 'var(--success-color)' : 'var(--primary-color)',
+                      color: '#ffffff', whiteSpace: 'nowrap', flexShrink: 0, padding: '4px 10px', fontSize: '11px'
+                    }}
+                  >
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
                 </div>
               </div>
             )}
-          </div>
-        </div>
-      </div>
 
-      {/* Onboarding link banner */}
-      {onboarding && !onboarding.linked && (
-        <div style={{ ...card, border: '1px solid #fbbf24', backgroundColor: '#fffbeb', padding: '16px 24px' }}>
-          <h2 style={{ fontSize: '16px', fontWeight: 'bold', color: '#92400e', marginBottom: '4px' }}>
-            📲 Connect Patient to Telegram
-          </h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '10px', backgroundColor: 'white', borderRadius: '6px', padding: '10px 14px', border: '1px solid #fde68a' }}>
-            <span style={{ flex: 1, fontSize: '13px', color: '#374151', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-              {onboarding.link}
-            </span>
-            <button onClick={handleCopyLink} style={{ backgroundColor: copied ? '#10b981' : '#1a56db', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 14px', cursor: 'pointer', fontSize: '13px', whiteSpace: 'nowrap', flexShrink: 0 }}>
-              {copied ? '✓ Copied' : 'Copy Link'}
-            </button>
-          </div>
-          <p style={{ fontSize: '12px', color: '#92400e', marginTop: '6px', margin: '6px 0 0' }}>
-            Code: <b>{onboarding.onboarding_code}</b>
-          </p>
-        </div>
-      )}
-      {onboarding?.linked && (
-        <div style={{ ...card, border: '1px solid #a7f3d0', backgroundColor: '#ecfdf5', padding: '14px 24px' }}>
-          <p style={{ fontSize: '14px', color: '#065f46', margin: 0 }}>
-            ✅ <b>Telegram connected.</b> Reminders and alerts are being delivered.
-          </p>
-        </div>
-      )}
-
-      {/* Two-column layout: left=wellness+activity, right=visit note */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '24px' }}>
-
-        {/* Wellness */}
-        <div style={card}>
-          <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '16px' }}>
-            🌟 Latest Wellness
-          </h2>
-          <WellnessCard wellness={wellness} />
-        </div>
-
-        {/* Today's activity */}
-        <div style={card}>
-          <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '16px' }}>
-            📋 Today's Activity
-          </h2>
-          {logs.length === 0 ? (
-            <p style={{ color: '#6b7280', fontSize: '14px' }}>No activity logged today.</p>
-          ) : (
-            logs.map(log => (
-              <div key={log.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: '#f8fafc', borderRadius: '6px', marginBottom: '8px', border: '1px solid #e5e7eb' }}>
-                <div>
-                  <span style={{ fontWeight: 'bold', color: statusColors[log.status], marginRight: '8px' }}>
-                    {statusEmoji[log.status]} {log.status.toUpperCase()}
-                  </span>
-                  <span style={{ fontSize: '13px', color: '#6b7280' }}>
-                    {log.patient_reply ? `"${log.patient_reply}"` : 'No reply'}
-                  </span>
-                </div>
-                <div style={{ fontSize: '12px', color: '#9ca3af' }}>
-                  {new Date(log.created_at).toLocaleTimeString()}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Recent visit notes + submit form */}
-      <div style={card}>
-        <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '16px' }}>
-          📝 Visit Notes
-        </h2>
-
-        {recentNotes.length === 0 ? (
-          <p style={{ color: '#6b7280', fontSize: '14px' }}>No visit notes recorded yet.</p>
-        ) : (
-          recentNotes.map(note => {
-            const rc2 = riskLevelConfig[note.risk_level] || riskLevelConfig.none
-            let risks = []
-            try { risks = JSON.parse(note.risk_flags || '[]') } catch {}
-            return (
-              <div key={note.id} style={{
-                backgroundColor: '#f8fafc', borderRadius: '8px',
-                padding: '12px 16px', marginBottom: '10px',
-                border: `1px solid ${note.risk_level !== 'none' ? '#fecaca' : '#e5e7eb'}`,
-                borderLeft: `3px solid ${rc2.color}`
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '12px', fontWeight: '600', color: rc2.color, backgroundColor: rc2.bg, padding: '2px 8px', borderRadius: '4px' }}>
-                      {rc2.icon} {rc2.label}
-                    </span>
-                    {note.follow_up_needed && (
-                      <span style={{ fontSize: '11px', color: '#1d4ed8', backgroundColor: '#eff6ff', padding: '2px 8px', borderRadius: '4px', fontWeight: '600' }}>
-                        📌 Follow-up
-                      </span>
-                    )}
-                  </div>
-                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-                    {new Date(note.visit_date).toLocaleDateString()}
-                  </span>
-                </div>
-                <p style={{ fontSize: '13px', color: '#374151', margin: '4px 0', lineHeight: '1.5' }}>
-                  {note.visit_summary || 'No summary.'}
+            {onboarding?.linked && (
+              <div className="card-premium" style={{ border: '1px solid var(--success-color)', backgroundColor: 'var(--success-bg)', padding: '12px 16px', marginBottom: 0 }}>
+                <p style={{ fontSize: '12px', color: 'var(--success-color)', margin: 0, fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Icons.Activity size={14} /> <b>Telegram connected.</b> Automated reminders are active.
                 </p>
-                {risks.length > 0 && (
-                  <div style={{ fontSize: '12px', color: '#dc2626', marginTop: '4px' }}>
-                    ⚠️ {risks.join(' · ')}
+              </div>
+            )}
+
+            {/* Family Contacts Card */}
+            <div className="card-premium" style={{ marginBottom: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Icons.Users size={16} /> Family Contacts
+                </h2>
+                <button
+                  onClick={() => setShowFamilyForm(!showFamilyForm)}
+                  className="btn-premium"
+                  style={{ backgroundColor: 'var(--primary-color)', color: '#ffffff', padding: '4px 12px', fontSize: '12px' }}
+                >
+                  {showFamilyForm ? 'Cancel' : '+ Add Contact'}
+                </button>
+              </div>
+
+              {showFamilyForm && (
+                <div style={{ backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '12px', border: '1px solid var(--neutral-border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '8px', marginBottom: '12px' }}>
+                    {[
+                      { key: 'name', label: 'Name', placeholder: 'Sarah Thomas' },
+                      { key: 'phone', label: 'Phone', placeholder: '+919876543210' },
+                      { key: 'relation', label: 'Relation', placeholder: 'e.g. daughter' },
+                    ].map(field => (
+                      <div key={field.key}>
+                        <label style={{ fontSize: '11px', color: 'var(--neutral-text)', display: 'block', marginBottom: '2px', fontWeight: '600' }}>{field.label}</label>
+                        <input type="text" placeholder={field.placeholder} value={familyForm[field.key]} onChange={e => setFamilyForm({ ...familyForm, [field.key]: e.target.value })} style={inputStyle} />
+                      </div>
+                    ))}
                   </div>
-                )}
-              </div>
-            )
-          })
-        )}
-
-        <VisitNoteForm patientId={id} onSubmitted={fetchData} />
-      </div>
-
-      {/* Medications */}
-      <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e3a5f' }}>💊 Medications</h2>
-          <button onClick={() => setShowMedForm(!showMedForm)} style={btnP}>+ Add</button>
-        </div>
-
-        {showMedForm && (
-          <div style={{ backgroundColor: '#f8fafc', borderRadius: '8px', padding: '16px', marginBottom: '16px', border: '1px solid #e5e7eb' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-              {[
-                { key: 'name', label: 'Medication Name', placeholder: 'e.g. Metformin' },
-                { key: 'dosage', label: 'Dosage', placeholder: 'e.g. 500mg' },
-                { key: 'times', label: 'Times UTC (comma separated)', placeholder: 'e.g. 09:00, 21:00' },
-              ].map(field => (
-                <div key={field.key}>
-                  <label style={{ fontSize: '13px', color: '#374151', display: 'block', marginBottom: '4px' }}>{field.label}</label>
-                  <input type="text" placeholder={field.placeholder} value={medForm[field.key]} onChange={e => setMedForm({ ...medForm, [field.key]: e.target.value })} style={input} />
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button onClick={handleAddFamily} className="btn-premium btn-success" style={{ padding: '5px 12px', fontSize: '12px', fontWeight: '700' }}>Save</button>
+                    <button onClick={() => setShowFamilyForm(false)} className="btn-primary-outline" style={{ borderRadius: 'var(--radius-md)', padding: '5px 10px', fontSize: '12px' }}>Cancel</button>
+                  </div>
                 </div>
-              ))}
-              <div>
-                <label style={{ fontSize: '13px', color: '#374151', display: 'block', marginBottom: '4px' }}>Frequency</label>
-                <select value={medForm.frequency} onChange={e => setMedForm({ ...medForm, frequency: e.target.value })} style={input}>
-                  <option value="daily">Daily</option>
-                  <option value="twice_daily">Twice Daily</option>
-                  <option value="weekly">Weekly</option>
-                </select>
-              </div>
+              )}
+
+              {familyContacts.length === 0 ? (
+                <p style={{ color: 'var(--neutral-muted)', fontSize: '13px', margin: 0 }}>No family contacts.</p>
+              ) : (
+                familyContacts.map(contact => {
+                  const fl = familyLinks[contact.id]
+                  return (
+                    <div key={contact.id} style={{ backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-sm)', marginBottom: '8px', border: '1px solid var(--neutral-border)', overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: '700', color: 'var(--neutral-dark)', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{contact.name}</div>
+                          <div style={{ color: 'var(--neutral-muted)', fontSize: '11px', marginTop: '2px' }}>{contact.relation} · {contact.phone}</div>
+                        </div>
+                        <button onClick={() => handleDeleteFamily(contact.id)} className="btn-premium btn-danger" style={{ padding: '3px 8px', fontSize: '10px', flexShrink: 0, marginLeft: '6px' }}>Remove</button>
+                      </div>
+                      {fl && !fl.linked && (
+                        <div style={{ borderTop: '1px solid var(--neutral-border)', backgroundColor: 'var(--warning-bg)', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'space-between' }}>
+                          <span style={{ fontSize: '11px', color: 'var(--neutral-text)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{fl.link}</span>
+                          <button
+                            onClick={() => handleCopyFamilyLink(contact.id)}
+                            className="btn-premium"
+                            style={{
+                              backgroundColor: copiedContact === contact.id ? 'var(--success-color)' : 'var(--primary-color)',
+                              color: '#ffffff', whiteSpace: 'nowrap', flexShrink: 0, padding: '3px 8px', fontSize: '10px', marginLeft: '6px'
+                            }}
+                          >
+                            {copiedContact === contact.id ? '✓' : 'Copy'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={handleAddMedication} style={{ ...btnP, padding: '8px 20px' }}>Save</button>
-              <button onClick={() => setShowMedForm(false)} style={btnS}>Cancel</button>
-            </div>
+
           </div>
-        )}
 
-        {medications.length === 0 ? (
-          <p style={{ color: '#6b7280', fontSize: '14px' }}>No medications added yet.</p>
-        ) : (
-          medications.map(med => (
-            <div key={med.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#f8fafc', borderRadius: '6px', marginBottom: '8px', border: '1px solid #e5e7eb' }}>
-              <div>
-                <span style={{ fontWeight: 'bold', color: '#1e3a5f' }}>{med.name}</span>
-                <span style={{ color: '#6b7280', fontSize: '13px', marginLeft: '8px' }}>{med.dosage} · {med.frequency} · {med.times?.join(', ')} UTC</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ backgroundColor: med.active ? '#d1fae5' : '#fee2e2', color: med.active ? '#10b981' : '#ef4444', padding: '2px 8px', borderRadius: '12px', fontSize: '12px' }}>
-                  {med.active ? 'Active' : 'Inactive'}
-                </span>
-                <button onClick={() => handleDeleteMedication(med.id)} style={btnD}>Delete</button>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Family Contacts */}
-      <div style={card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e3a5f' }}>👨‍👩‍👧 Family Contacts</h2>
-          <button onClick={() => setShowFamilyForm(!showFamilyForm)} style={btnP}>+ Add</button>
         </div>
+      )}
 
-        {showFamilyForm && (
-          <div style={{ backgroundColor: '#f8fafc', borderRadius: '8px', padding: '16px', marginBottom: '16px', border: '1px solid #e5e7eb' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-              {[
-                { key: 'name', label: 'Name', placeholder: 'e.g. Sarah Thomas' },
-                { key: 'phone', label: 'Phone', placeholder: '+919876543210' },
-                { key: 'relation', label: 'Relation', placeholder: 'e.g. daughter' },
-              ].map(field => (
-                <div key={field.key}>
-                  <label style={{ fontSize: '13px', color: '#374151', display: 'block', marginBottom: '4px' }}>{field.label}</label>
-                  <input type="text" placeholder={field.placeholder} value={familyForm[field.key]} onChange={e => setFamilyForm({ ...familyForm, [field.key]: e.target.value })} style={input} />
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={handleAddFamily} style={{ ...btnP, padding: '8px 20px' }}>Save</button>
-              <button onClick={() => setShowFamilyForm(false)} style={btnS}>Cancel</button>
-            </div>
-          </div>
-        )}
-
-        {familyContacts.length === 0 ? (
-          <p style={{ color: '#6b7280', fontSize: '14px' }}>No family contacts added yet.</p>
-        ) : (
-          familyContacts.map(contact => {
-            const fl = familyLinks[contact.id]
-            return (
-              <div key={contact.id} style={{ backgroundColor: '#f8fafc', borderRadius: '6px', marginBottom: '8px', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px' }}>
-                  <div>
-                    <span style={{ fontWeight: 'bold', color: '#1e3a5f' }}>{contact.name}</span>
-                    <span style={{ color: '#6b7280', fontSize: '13px', marginLeft: '8px' }}>{contact.relation} · {contact.phone}</span>
-                    <span style={{ marginLeft: '10px', fontSize: '12px', fontWeight: '500', padding: '2px 8px', borderRadius: '12px', backgroundColor: contact.telegram_chat_id ? '#d1fae5' : '#fef3c7', color: contact.telegram_chat_id ? '#065f46' : '#92400e' }}>
-                      {contact.telegram_chat_id ? '🟢 Linked' : '⚠️ Not linked'}
-                    </span>
-                  </div>
-                  <button onClick={() => handleDeleteFamily(contact.id)} style={btnD}>Remove</button>
-                </div>
-                {fl && !fl.linked && (
-                  <div style={{ borderTop: '1px solid #fde68a', backgroundColor: '#fffbeb', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '12px', color: '#92400e', flexShrink: 0 }}>📲 Share link:</span>
-                    <span style={{ flex: 1, fontSize: '12px', color: '#374151', fontFamily: 'monospace', wordBreak: 'break-all' }}>{fl.link}</span>
-                    <button onClick={() => handleCopyFamilyLink(contact.id)} style={{ backgroundColor: copiedContact === contact.id ? '#10b981' : '#1a56db', color: 'white', border: 'none', borderRadius: '6px', padding: '4px 12px', cursor: 'pointer', fontSize: '12px', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                      {copiedContact === contact.id ? '✓ Copied' : 'Copy'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )
-          })
-        )}
-      </div>
     </div>
   )
 }

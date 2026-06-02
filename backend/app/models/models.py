@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, BigInteger, Boolean, ARRAY, ForeignKey, DateTime, Text
+from sqlalchemy import Column, String, Integer, BigInteger, Boolean, ARRAY, ForeignKey, DateTime, Text, Float, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy import Enum as SAEnum
@@ -72,6 +72,9 @@ class Patient(Base):
     caregiver_id = Column(UUID(as_uuid=True), nullable=True)
     telegram_chat_id = Column(BigInteger, unique=True, nullable=True)
     onboarding_code = Column(String, unique=True, nullable=True, index=True)
+    timezone = Column(String, default="Asia/Kolkata")
+    clinical_conditions = Column(Text, nullable=True)
+    baseline_bp = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     coordinator = relationship("User", back_populates="patients")
@@ -139,3 +142,31 @@ class FamilyContact(Base):
     onboarding_code = Column(String, unique=True, nullable=True, index=True)
 
     patient = relationship("Patient", back_populates="family_contacts")
+
+
+# ── ADK Session Models ───────────────────────────────────────────────────────
+
+class ADKSessionModel(Base):
+    __tablename__ = "adk_sessions"
+
+    id = Column(String, primary_key=True)
+    app_name = Column(String, nullable=False)
+    user_id = Column(String, nullable=False)
+    state = Column(JSON, default=dict)
+    events = Column(JSON, default=list)
+    last_update_time = Column(Float, default=0.0)
+
+
+class ADKAppStateModel(Base):
+    __tablename__ = "adk_app_states"
+
+    app_name = Column(String, primary_key=True)
+    state = Column(JSON, default=dict)
+
+
+class ADKUserStateModel(Base):
+    __tablename__ = "adk_user_states"
+
+    app_name = Column(String, primary_key=True)
+    user_id = Column(String, primary_key=True)
+    state = Column(JSON, default=dict)

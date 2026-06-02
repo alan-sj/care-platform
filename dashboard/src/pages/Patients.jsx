@@ -7,7 +7,7 @@ export default function Patients() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({
-    name: '', phone: '', age: '', language: 'en'
+    name: '', phone: '', age: '', language: 'en', clinical_conditions: '', baseline_bp: '', timezone: 'Asia/Kolkata'
   })
 
   useEffect(() => { fetchPatients() }, [])
@@ -30,7 +30,7 @@ export default function Patients() {
         age: form.age ? parseInt(form.age) : null,
       })
       setShowForm(false)
-      setForm({ name: '', phone: '', age: '', language: 'en' })
+      setForm({ name: '', phone: '', age: '', language: 'en', clinical_conditions: '', baseline_bp: '', timezone: 'Asia/Kolkata' })
       fetchPatients()
     } catch (err) {
       console.error(err)
@@ -39,41 +39,28 @@ export default function Patients() {
   }
 
   if (loading) return (
-    <div style={{ padding: '40px', textAlign: 'center', color: '#6b7280' }}>Loading...</div>
+    <div style={{ padding: '40px', textAlign: 'center', color: 'var(--neutral-muted)' }}>Loading...</div>
   )
 
   return (
-    <div style={{ padding: '32px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+    <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '24px', fontWeight: 'bold', color: '#1e3a5f' }}>
+        <h1 className="page-title" style={{ marginBottom: 0 }}>
           Patients
         </h1>
         <button
           onClick={() => setShowForm(!showForm)}
-          style={{
-            backgroundColor: '#1a56db',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            padding: '8px 16px',
-            cursor: 'pointer',
-            fontSize: '14px'
-          }}
+          className="btn-premium btn-success"
+          style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: 'var(--primary-color)' }}
         >
           + Add Patient
         </button>
       </div>
 
       {showForm && (
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '8px',
-          padding: '24px',
-          marginBottom: '24px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-        }}>
-          <h3 style={{ marginBottom: '4px', color: '#1e3a5f' }}>New Patient</h3>
-          <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '16px' }}>
+        <div className="card-premium">
+          <h3 style={{ marginBottom: '8px', color: 'var(--neutral-dark)', fontSize: '16px', fontWeight: '700' }}>New Patient</h3>
+          <p className="card-text-secondary" style={{ marginBottom: '16px' }}>
             A unique onboarding link will be generated automatically. Share it with the patient to connect their Telegram.
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -83,7 +70,7 @@ export default function Patients() {
               { key: 'age', label: 'Age', type: 'number' },
             ].map(field => (
               <div key={field.key}>
-                <label style={{ fontSize: '13px', color: '#374151', display: 'block', marginBottom: '4px' }}>
+                <label style={{ fontSize: '13px', color: 'var(--neutral-text)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>
                   {field.label} {field.required && '*'}
                 </label>
                 <input
@@ -93,16 +80,19 @@ export default function Patients() {
                   style={{
                     width: '100%',
                     padding: '8px 12px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '6px',
+                    border: '1px solid var(--neutral-border)',
+                    backgroundColor: 'var(--card-bg)',
+                    color: 'var(--neutral-dark)',
+                    borderRadius: 'var(--radius-sm)',
                     fontSize: '14px',
-                    boxSizing: 'border-box'
+                    boxSizing: 'border-box',
+                    outline: 'none'
                   }}
                 />
               </div>
             ))}
             <div>
-              <label style={{ fontSize: '13px', color: '#374151', display: 'block', marginBottom: '4px' }}>
+              <label style={{ fontSize: '13px', color: 'var(--neutral-text)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>
                 Language
               </label>
               <select
@@ -111,9 +101,12 @@ export default function Patients() {
                 style={{
                   width: '100%',
                   padding: '8px 12px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '6px',
-                  fontSize: '14px'
+                  border: '1px solid var(--neutral-border)',
+                  backgroundColor: 'var(--card-bg)',
+                  color: 'var(--neutral-dark)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '14px',
+                  outline: 'none'
                 }}
               >
                 <option value="en">English</option>
@@ -121,31 +114,87 @@ export default function Patients() {
                 <option value="ml">Malayalam</option>
               </select>
             </div>
+            <div>
+              <label style={{ fontSize: '13px', color: 'var(--neutral-text)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>
+                Baseline BP
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. 120/80"
+                value={form.baseline_bp}
+                onChange={e => setForm({ ...form, baseline_bp: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid var(--neutral-border)',
+                  backgroundColor: 'var(--card-bg)',
+                  color: 'var(--neutral-dark)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                  outline: 'none'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ fontSize: '13px', color: 'var(--neutral-text)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>
+                Timezone
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Asia/Kolkata"
+                value={form.timezone}
+                onChange={e => setForm({ ...form, timezone: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid var(--neutral-border)',
+                  backgroundColor: 'var(--card-bg)',
+                  color: 'var(--neutral-dark)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                  outline: 'none'
+                }}
+              />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ fontSize: '13px', color: 'var(--neutral-text)', display: 'block', marginBottom: '4px', fontWeight: '600' }}>
+                Clinical Conditions
+              </label>
+              <textarea
+                placeholder="e.g. Type 2 Diabetes, Hypertension, Mild Osteoarthritis"
+                value={form.clinical_conditions}
+                onChange={e => setForm({ ...form, clinical_conditions: e.target.value })}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid var(--neutral-border)',
+                  backgroundColor: 'var(--card-bg)',
+                  color: 'var(--neutral-dark)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                  minHeight: '60px',
+                  fontFamily: 'inherit',
+                  resize: 'vertical'
+                }}
+              />
+            </div>
           </div>
           <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
             <button
               onClick={handleSubmit}
-              style={{
-                backgroundColor: '#1a56db',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '8px 20px',
-                cursor: 'pointer'
-              }}
+              className="btn-premium btn-success"
+              style={{ padding: '8px 20px', backgroundColor: 'var(--primary-color)' }}
             >
               Save
             </button>
             <button
               onClick={() => setShowForm(false)}
-              style={{
-                backgroundColor: '#f3f4f6',
-                color: '#374151',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '8px 20px',
-                cursor: 'pointer'
-              }}
+              className="btn-premium btn-primary-outline"
+              style={{ padding: '8px 20px', border: '1px solid var(--neutral-border)', color: 'var(--neutral-text)' }}
             >
               Cancel
             </button>
@@ -154,19 +203,20 @@ export default function Patients() {
       )}
 
       {patients.length === 0 ? (
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '8px',
-          padding: '32px',
-          textAlign: 'center',
-          color: '#6b7280'
-        }}>
+        <div className="empty-state-card">
           No patients yet. Add your first patient above.
         </div>
       ) : (
-        patients.map(patient => (
-          <PatientCard key={patient.id} patient={patient} />
-        ))
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+          gap: '20px',
+          marginTop: '8px'
+        }}>
+          {patients.map(patient => (
+            <PatientCard key={patient.id} patient={patient} />
+          ))}
+        </div>
       )}
     </div>
   )

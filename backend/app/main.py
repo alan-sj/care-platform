@@ -28,6 +28,16 @@ if not _api_key:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     models.Base.metadata.create_all(bind=engine)
+    # Self-healing SQL migration to add missing columns to patients table
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS timezone VARCHAR DEFAULT 'Asia/Kolkata';"))
+            conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS clinical_conditions TEXT;"))
+            conn.execute(text("ALTER TABLE patients ADD COLUMN IF NOT EXISTS baseline_bp VARCHAR;"))
+    except Exception as e:
+        print(f"Migration error (could be fine if columns exist): {e}")
+
     from app.agents import (          # noqa: F401
         interpret_patient_reply,
         generate_family_summary,
@@ -37,6 +47,11 @@ async def lifespan(app: FastAPI):
         process_visit_note,
     )
     yield
+    try:
+        from app.services.notification_service import close_notification_client
+        await close_notification_client()
+    except Exception as e:
+        print(f"Error closing notification client: {e}")
 
 
 app = FastAPI(

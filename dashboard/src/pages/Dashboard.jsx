@@ -4,6 +4,7 @@ import StatCard from '../components/StatCard'
 import AlertCard from '../components/AlertCard'
 import { getPatients } from '../api/patients'
 import { getOpenAlerts, acknowledgeAlert, resolveAlert } from '../api/alerts'
+import * as Icons from '../components/Icons'
 
 export default function Dashboard() {
   const [patients, setPatients] = useState([])
@@ -56,48 +57,33 @@ export default function Dashboard() {
   const criticalAlerts = alerts.filter(a => a.severity === 'critical' || a.severity === 'high')
 
   return (
-    <div style={{ padding: '32px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
-      <h1 style={{ fontSize: '24px', fontWeight: 'bold', color: '#1e3a5f', marginBottom: '24px' }}>
+    <div className="page-container">
+      <h1 className="page-title">
         Overview
       </h1>
 
-      <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', flexWrap: 'wrap' }}>
-        <StatCard title="Total Patients" value={patients.length} color="#1a56db" icon="👥" />
-        <StatCard title="Open Alerts" value={alerts.length} color="#ef4444" icon="🔔" />
-        <StatCard title="High Priority" value={criticalAlerts.length} color="#f97316" icon="🚨" />
-        <StatCard title="Patients Active" value={patients.filter(p => p.telegram_chat_id).length} color="#10b981" icon="✅" />
+      <div className="stats-grid">
+        <StatCard title="Total Patients" value={patients.length} icon={<Icons.Users size={16} />} />
+        <StatCard title="Open Alerts" value={alerts.length} icon={<Icons.Bell size={16} />} />
+        <StatCard title="High Priority" value={criticalAlerts.length} icon={<Icons.AlertTriangle size={16} />} />
+        <StatCard title="Patients Active" value={patients.filter(p => p.telegram_chat_id).length} icon={<Icons.Activity size={16} />} />
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1e3a5f' }}>
+      <div className="alerts-header-row">
+        <h2 className="alerts-header-title">
           Open Alerts
         </h2>
         <button
           onClick={() => navigate('/alerts')}
-          style={{
-            backgroundColor: 'transparent',
-            border: '1px solid #1a56db',
-            color: '#1a56db',
-            padding: '6px 14px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '13px'
-          }}
+          className="btn-primary-outline"
         >
           View All
         </button>
       </div>
 
       {alerts.length === 0 ? (
-        <div style={{
-          backgroundColor: 'white',
-          borderRadius: '8px',
-          padding: '32px',
-          textAlign: 'center',
-          color: '#6b7280',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-        }}>
-          ✅ No open alerts right now
+        <div className="empty-state-card">
+          No open alerts right now
         </div>
       ) : (
         alerts.slice(0, 5).map(alert => (

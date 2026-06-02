@@ -41,6 +41,9 @@ class PatientCreate(BaseModel):
     coordinator_id: Optional[UUID] = None
     caregiver_id: Optional[UUID] = None
     telegram_chat_id: Optional[int] = None
+    clinical_conditions: Optional[str] = None
+    baseline_bp: Optional[str] = None
+    timezone: Optional[str] = "Asia/Kolkata"
 
 class PatientResponse(BaseModel):
     id: UUID
@@ -50,10 +53,24 @@ class PatientResponse(BaseModel):
     language: LanguageType
     telegram_chat_id: Optional[int]
     onboarding_code: Optional[str]
+    clinical_conditions: Optional[str]
+    baseline_bp: Optional[str]
+    timezone: Optional[str]
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class PatientUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    age: Optional[int] = None
+    language: Optional[LanguageType] = None
+    clinical_conditions: Optional[str] = None
+    baseline_bp: Optional[str] = None
+    timezone: Optional[str] = None
+    coordinator_id: Optional[UUID] = None
 
 
 class OnboardingLinkResponse(BaseModel):

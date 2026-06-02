@@ -18,43 +18,38 @@ const typeLabel = {
   flagged: 'Health Concern'
 }
 
-export default function AlertCard({ alert, patientName, onAcknowledge, onResolve }) {  return (
-    <div style={{
-      backgroundColor: 'white',
-      borderRadius: '8px',
-      padding: '16px 20px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-      borderLeft: `4px solid ${severityColors[alert.severity] || '#6b7280'}`,
-      marginBottom: '12px'
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div>
-          <div style={{ fontWeight: 'bold', fontSize: '15px', marginBottom: '4px' }}>
-            {severityEmoji[alert.severity]} {typeLabel[alert.type] || alert.type}
+export default function AlertCard({ alert, patientName, onAcknowledge, onResolve }) {
+  const isCritical = alert.severity === 'critical' || alert.severity === 'high';
+  const badgeClass = isCritical ? 'badge-danger' : 'badge-warning';
+
+  return (
+    <div className="card-premium">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+        <div style={{ flex: 1, minWidth: '240px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+            <span className={`badge-premium ${badgeClass}`}>
+              {alert.severity}
+            </span>
+            <span style={{ fontSize: '15px', fontWeight: '700', color: 'var(--neutral-dark)' }}>
+              {typeLabel[alert.type] || alert.type}
+            </span>
           </div>
-              <div style={{ fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
-              Patient: {patientName}
-              </div>
-          <div style={{ fontSize: '14px', color: '#374151', marginBottom: '8px' }}>
+          <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--neutral-muted)', marginBottom: '6px' }}>
+            Patient: <span style={{ color: 'var(--neutral-dark)' }}>{patientName}</span>
+          </div>
+          <div style={{ fontSize: '14px', color: 'var(--neutral-text)', marginBottom: '12px', lineHeight: '1.6' }}>
             {alert.message}
           </div>
-          <div style={{ fontSize: '12px', color: '#9ca3af' }}>
-            {new Date(alert.created_at).toLocaleString()}
+          <div style={{ fontSize: '11px', color: 'var(--neutral-muted)' }}>
+            Created: {new Date(alert.created_at).toLocaleString()}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '8px', flexShrink: 0, marginLeft: '16px' }}>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           {alert.status === 'open' && (
             <button
               onClick={() => onAcknowledge(alert.id)}
-              style={{
-                backgroundColor: '#f59e0b',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px'
-              }}
+              className="btn-premium btn-warning"
             >
               Acknowledge
             </button>
@@ -62,29 +57,18 @@ export default function AlertCard({ alert, patientName, onAcknowledge, onResolve
           {alert.status !== 'resolved' && (
             <button
               onClick={() => onResolve(alert.id)}
-              style={{
-                backgroundColor: '#10b981',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '13px'
-              }}
+              className="btn-premium btn-success"
             >
               Resolve
             </button>
           )}
-          <span style={{
-            backgroundColor: alert.status === 'open' ? '#fee2e2' : alert.status === 'acknowledged' ? '#fef3c7' : '#d1fae5',
-            color: alert.status === 'open' ? '#ef4444' : alert.status === 'acknowledged' ? '#f59e0b' : '#10b981',
-            padding: '4px 10px',
-            borderRadius: '20px',
-            fontSize: '12px',
-            fontWeight: 'bold',
-            alignSelf: 'center'
-          }}>
-            {alert.status.toUpperCase()}
+          <span 
+            className={`badge-premium badge-${
+              alert.status === 'open' ? 'danger' : alert.status === 'acknowledged' ? 'warning' : 'success'
+            }`}
+            style={{ padding: '6px 12px' }}
+          >
+            {alert.status}
           </span>
         </div>
       </div>

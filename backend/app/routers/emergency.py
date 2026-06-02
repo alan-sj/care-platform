@@ -168,6 +168,7 @@ async def _run_assessment(patient: Patient, db: Session) -> dict:
         medication_data=med_data,
         wellness_data=wellness_data,
         recent_messages=messages,
+        patient_id=patient.id,
     )
     return result
 
@@ -231,8 +232,6 @@ async def _handle_escalation(patient: Patient, result: dict, db: Session):
     if patient_msg and patient.telegram_chat_id and risk_level in ["medium", "high", "critical"]:
         await send_telegram_message(patient.telegram_chat_id, patient_msg)
 
-    db.commit()
-
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
@@ -260,6 +259,7 @@ async def scan_all_patients(db: Session = Depends(get_db)):
             "escalated":   result.get("needs_immediate_escalation", False),
         })
 
+    db.commit()
     return {"status": "done", "results": results}
 
 
@@ -276,6 +276,7 @@ async def trigger_assessment(
     result = await _run_assessment(patient, db)
     await _handle_escalation(patient, result, db)
 
+    db.commit()
     return {
         "patient":    patient.name,
         "assessment": result,

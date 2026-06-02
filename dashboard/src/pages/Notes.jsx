@@ -3,23 +3,24 @@ import { useNavigate } from 'react-router-dom'
 import { getPendingFollowups } from '../api/copilot'
 import { getPatients } from '../api/patients'
 import { getPatientNotes } from '../api/copilot'
+import * as Icons from '../components/Icons'
 
-const riskColors = {
-  none:   { color: '#16a34a', bg: '#f0fdf4', label: 'No Risk' },
-  low:    { color: '#ca8a04', bg: '#fefce8', label: 'Low' },
-  medium: { color: '#ea580c', bg: '#fff7ed', label: 'Medium' },
-  high:   { color: '#dc2626', bg: '#fef2f2', label: 'High' },
+const riskConfig = {
+  none:   { color: 'var(--success-color)', bg: 'var(--success-bg)', label: 'No Risk' },
+  low:    { color: 'var(--warning-color)', bg: 'var(--warning-bg)', label: 'Low Risk' },
+  medium: { color: 'var(--warning-color)', bg: 'var(--warning-bg)', label: 'Medium Risk' },
+  high:   { color: 'var(--error-color)', bg: 'var(--error-bg)', label: 'High Risk' },
 }
 
 const qualityConfig = {
-  complete: { color: '#16a34a', label: '✅ Complete' },
-  partial:  { color: '#ca8a04', label: '⚠️ Partial' },
-  minimal:  { color: '#dc2626', label: '❌ Minimal' },
+  complete: { color: 'var(--success-color)', label: 'Complete' },
+  partial:  { color: 'var(--warning-color)', label: 'Partial' },
+  minimal:  { color: 'var(--error-color)', label: 'Minimal' },
 }
 
 function NoteCard({ note, patientName }) {
   const [expanded, setExpanded] = useState(false)
-  const rc = riskColors[note.risk_level] || riskColors.none
+  const rc = riskConfig[note.risk_level] || riskConfig.none
   const qc = qualityConfig[note.note_quality] || qualityConfig.partial
 
   let vitals = {}
@@ -31,70 +32,55 @@ function NoteCard({ note, patientName }) {
 
   const hasVitals = Object.values(vitals).some(v => v && v !== 'null')
 
+  const cardBorderColor = note.risk_level !== 'none' ? rc.color : 'var(--neutral-border)'
+
   return (
-    <div style={{
-      backgroundColor: 'white', borderRadius: '10px',
-      border: `1px solid ${note.risk_level !== 'none' ? rc.bg : '#f1f5f9'}`,
-      borderLeft: `4px solid ${rc.color}`,
-      marginBottom: '12px', overflow: 'hidden'
-    }}>
+    <div className="card-premium" style={{ border: `1px solid ${cardBorderColor}`, marginBottom: '12px', overflow: 'hidden', padding: 0 }}>
       <div
         style={{ padding: '16px 20px', cursor: 'pointer' }}
         onClick={() => setExpanded(!expanded)}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
           <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' }}>
-              <span style={{ fontWeight: '600', color: '#0f172a', fontSize: '15px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+              <span style={{ fontWeight: '700', color: 'var(--neutral-dark)', fontSize: '15px' }}>
                 {patientName}
               </span>
-              <span style={{
-                backgroundColor: rc.bg, color: rc.color,
-                fontSize: '11px', fontWeight: '600',
-                padding: '2px 8px', borderRadius: '4px'
-              }}>
+              <span className={`badge-premium ${note.risk_level === 'high' ? 'badge-danger' : note.risk_level === 'none' ? 'badge-success' : 'badge-warning'}`}>
                 {rc.label}
               </span>
-              <span style={{ fontSize: '12px', color: qc.color }}>{qc.label}</span>
+              <span style={{ fontSize: '12px', color: qc.color, fontWeight: '600' }}>{qc.label}</span>
               {note.follow_up_needed && (
-                <span style={{
-                  backgroundColor: '#eff6ff', color: '#1d4ed8',
-                  fontSize: '11px', fontWeight: '600',
-                  padding: '2px 8px', borderRadius: '4px'
-                }}>
-                  📌 Follow-up
+                <span className="badge-premium badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <Icons.Calendar size={11} /> Follow-up
                 </span>
               )}
             </div>
-            <div style={{ fontSize: '13px', color: '#374151', lineHeight: '1.5' }}>
+            <div style={{ fontSize: '14px', color: 'var(--neutral-text)', lineHeight: '1.5' }}>
               {note.visit_summary || 'No summary available.'}
             </div>
-            <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '6px' }}>
+            <div style={{ fontSize: '11px', color: 'var(--neutral-muted)', marginTop: '8px' }}>
               {new Date(note.visit_date).toLocaleString()} · Coordinator: {note.coordinator || 'Unknown'}
             </div>
           </div>
-          <div style={{ fontSize: '18px', color: '#94a3b8', flexShrink: 0, paddingTop: '2px' }}>
+          <div style={{ fontSize: '16px', color: 'var(--neutral-muted)', flexShrink: 0, paddingTop: '2px' }}>
             {expanded ? '▲' : '▼'}
           </div>
         </div>
       </div>
 
       {expanded && (
-        <div style={{ borderTop: '1px solid #f1f5f9', padding: '16px 20px', backgroundColor: '#fafafa' }}>
+        <div style={{ borderTop: '1px solid var(--neutral-border)', padding: '16px 20px', backgroundColor: 'var(--neutral-bg)' }}>
           {/* Risk flags */}
           {risks.length > 0 && (
             <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#374151', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--neutral-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Risk Flags
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                 {risks.map((r, i) => (
-                  <span key={i} style={{
-                    backgroundColor: '#fef2f2', color: '#dc2626',
-                    fontSize: '12px', padding: '3px 8px', borderRadius: '4px',
-                    border: '1px solid #fecaca'
-                  }}>
-                    ⚠️ {r}
+                  <span key={i} className="badge-premium badge-danger" style={{ textTransform: 'none', borderRadius: 'var(--radius-sm)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <Icons.AlertTriangle size={11} /> {r}
                   </span>
                 ))}
               </div>
@@ -104,17 +90,17 @@ function NoteCard({ note, patientName }) {
           {/* Vitals */}
           {hasVitals && (
             <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#374151', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--neutral-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Vitals
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '6px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '8px' }}>
                 {Object.entries(vitals).map(([k, v]) => v && v !== 'null' ? (
                   <div key={k} style={{
-                    backgroundColor: 'white', borderRadius: '6px',
-                    padding: '6px 10px', border: '1px solid #e5e7eb'
+                    backgroundColor: 'var(--card-bg)', borderRadius: 'var(--radius-sm)',
+                    padding: '6px 10px', border: '1px solid var(--neutral-border)'
                   }}>
-                    <div style={{ fontSize: '10px', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{k}</div>
-                    <div style={{ fontSize: '13px', fontWeight: '600', color: '#374151' }}>{v}</div>
+                    <div style={{ fontSize: '9px', color: 'var(--neutral-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{k}</div>
+                    <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--neutral-dark)' }}>{v}</div>
                   </div>
                 ) : null)}
               </div>
@@ -124,17 +110,13 @@ function NoteCard({ note, patientName }) {
           {/* Medications given */}
           {meds.length > 0 && (
             <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#374151', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--neutral-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Medications Given
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                 {meds.map((m, i) => (
-                  <span key={i} style={{
-                    backgroundColor: '#f0fdf4', color: '#16a34a',
-                    fontSize: '12px', padding: '3px 8px', borderRadius: '4px',
-                    border: '1px solid #bbf7d0'
-                  }}>
-                    💊 {m}
+                  <span key={i} className="badge-premium badge-success" style={{ textTransform: 'none', borderRadius: 'var(--radius-sm)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <Icons.Pill size={11} /> {m}
                   </span>
                 ))}
               </div>
@@ -144,10 +126,10 @@ function NoteCard({ note, patientName }) {
           {/* Observations */}
           {note.observations && (
             <div style={{ marginBottom: '14px' }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#374151', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--neutral-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Observations
               </div>
-              <p style={{ fontSize: '13px', color: '#374151', lineHeight: '1.6', margin: 0 }}>
+              <p style={{ fontSize: '13px', color: 'var(--neutral-text)', lineHeight: '1.6', margin: 0 }}>
                 {note.observations}
               </p>
             </div>
@@ -155,14 +137,14 @@ function NoteCard({ note, patientName }) {
 
           {/* Follow-up note */}
           {note.follow_up_note && (
-            <div style={{
-              backgroundColor: '#eff6ff', borderRadius: '6px',
-              padding: '10px 14px', borderLeft: '3px solid #1d4ed8'
+            <div className="card-premium" style={{
+              backgroundColor: 'var(--info-bg)', border: '1px solid var(--info-color)',
+              padding: '10px 14px', marginBottom: '14px'
             }}>
-              <div style={{ fontSize: '12px', fontWeight: '600', color: '#1d4ed8', marginBottom: '4px' }}>
-                📌 Follow-up Required
+              <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--info-color)', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Icons.Calendar size={12} /> Follow-up Required
               </div>
-              <p style={{ fontSize: '13px', color: '#374151', margin: 0 }}>
+              <p style={{ fontSize: '13px', color: 'var(--neutral-dark)', margin: 0 }}>
                 {note.follow_up_note}
               </p>
             </div>
@@ -170,13 +152,13 @@ function NoteCard({ note, patientName }) {
 
           {/* Raw note */}
           <div style={{ marginTop: '12px' }}>
-            <div style={{ fontSize: '12px', fontWeight: '600', color: '#9ca3af', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--neutral-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               Original Note
             </div>
             <div style={{
-              backgroundColor: 'white', borderRadius: '6px',
-              padding: '10px 14px', border: '1px solid #e5e7eb',
-              fontSize: '13px', color: '#6b7280', lineHeight: '1.6',
+              backgroundColor: 'var(--card-bg)', borderRadius: 'var(--radius-sm)',
+              padding: '10px 14px', border: '1px solid var(--neutral-border)',
+              fontSize: '13px', color: 'var(--neutral-muted)', lineHeight: '1.6',
               fontStyle: 'italic'
             }}>
               "{note.raw_note}"
@@ -240,53 +222,65 @@ export default function Notes() {
     ? baseNotes.filter(n => n.risk_level !== 'none')
     : baseNotes
 
-  const tabBtn = (id, label, count) => (
-    <button
-      onClick={() => setTab(id)}
-      style={{
-        padding: '7px 16px', borderRadius: '6px', fontSize: '13px',
-        cursor: 'pointer', fontWeight: tab === id ? '600' : '400',
-        border: tab === id ? '1.5px solid #1e3a5f' : '1px solid #e5e7eb',
-        backgroundColor: tab === id ? '#1e3a5f' : 'white',
-        color: tab === id ? 'white' : '#374151'
-      }}
-    >
-      {label} {count !== undefined && <span style={{ opacity: 0.7 }}>({count})</span>}
-    </button>
-  )
+  const tabBtn = (id, label, count) => {
+    const isSelected = tab === id
+    return (
+      <button
+        onClick={() => setTab(id)}
+        style={{
+          padding: '8px 16px',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '13px',
+          cursor: 'pointer',
+          fontWeight: '600',
+          border: isSelected ? '1px solid var(--primary-color)' : '1px solid var(--neutral-border)',
+          backgroundColor: isSelected ? 'var(--primary-color)' : 'var(--card-bg)',
+          color: isSelected ? 'var(--card-bg)' : 'var(--neutral-text)',
+          transition: 'all 0.15s ease'
+        }}
+      >
+        {label} {count !== undefined && <span style={{ opacity: 0.8 }}>({count})</span>}
+      </button>
+    )
+  }
 
   return (
-    <div style={{ padding: '32px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
-      <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '24px', fontWeight: '700', color: '#1e3a5f', marginBottom: '4px' }}>
+    <div className="page-container">
+      <div style={{ marginBottom: '28px' }}>
+        <h1 className="page-title" style={{ marginBottom: '6px' }}>
           Visit Notes
         </h1>
-        <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>
+        <p style={{ fontSize: '13px', color: 'var(--neutral-muted)', margin: 0 }}>
           Coordinator visit history and follow-up tracking (last 90 days)
         </p>
       </div>
 
       {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+      <div className="stats-grid">
         {[
-          { label: 'Total Notes', value: allNotes.length, color: '#1e3a5f' },
-          { label: 'Follow-ups Due', value: allNotes.filter(n => n.follow_up_needed).length, color: '#1d4ed8' },
-          { label: 'Risk Flags', value: allNotes.filter(n => n.risk_level !== 'none').length, color: '#dc2626' },
-          { label: 'High Risk Notes', value: allNotes.filter(n => n.risk_level === 'high').length, color: '#ea580c' },
+          { label: 'Total Notes', value: allNotes.length, color: 'var(--primary-color)', bg: 'var(--primary-bg)', icon: <Icons.FileText size={14} /> },
+          { label: 'Follow-ups Due', value: allNotes.filter(n => n.follow_up_needed).length, color: 'var(--info-color)', bg: 'var(--info-bg)', icon: <Icons.Calendar size={14} /> },
+          { label: 'Risk Flags', value: allNotes.filter(n => n.risk_level !== 'none').length, color: 'var(--warning-color)', bg: 'var(--warning-bg)', icon: <Icons.AlertTriangle size={14} /> },
+          { label: 'High Risk Notes', value: allNotes.filter(n => n.risk_level === 'high').length, color: 'var(--error-color)', bg: 'var(--error-bg)', icon: <Icons.AlertTriangle size={14} /> },
         ].map(s => (
-          <div key={s.label} style={{
-            backgroundColor: 'white', borderRadius: '8px',
-            padding: '16px 18px', boxShadow: '0 1px 3px rgba(0,0,0,0.07)',
-            borderLeft: `3px solid ${s.color}`
-          }}>
-            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>{s.label}</div>
-            <div style={{ fontSize: '28px', fontWeight: '700', color: s.color }}>{s.value}</div>
+          <div key={s.label} className="card-premium" style={{ display: 'flex', flexDirection: 'column', padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <span style={{ fontSize: '12px', color: 'var(--neutral-muted)', fontWeight: '600' }}>{s.label}</span>
+              <div style={{
+                width: '28px', height: '28px', borderRadius: '50%',
+                backgroundColor: s.bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: s.color
+              }}>
+                {s.icon}
+              </div>
+            </div>
+            <div style={{ fontSize: '28px', fontWeight: '800', color: 'var(--neutral-dark)' }}>{s.value}</div>
           </div>
         ))}
       </div>
 
       {/* Filters */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           {tabBtn('all', 'All Notes', allNotes.length)}
           {tabBtn('followups', 'Follow-ups', allNotes.filter(n => n.follow_up_needed).length)}
@@ -296,9 +290,14 @@ export default function Notes() {
           value={filterPatient}
           onChange={e => setFilterPatient(e.target.value)}
           style={{
-            padding: '6px 12px', border: '1px solid #e5e7eb',
-            borderRadius: '6px', fontSize: '13px', backgroundColor: 'white',
-            cursor: 'pointer'
+            padding: '8px 12px',
+            border: '1px solid var(--neutral-border)',
+            borderRadius: 'var(--radius-md)',
+            fontSize: '13px',
+            backgroundColor: 'var(--card-bg)',
+            color: 'var(--neutral-text)',
+            cursor: 'pointer',
+            outline: 'none'
           }}
         >
           <option value="all">All Patients</option>
@@ -309,17 +308,13 @@ export default function Notes() {
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', color: '#94a3b8', padding: '48px', backgroundColor: 'white', borderRadius: '10px' }}>
+        <div className="card-premium" style={{ textAlign: 'center', color: 'var(--neutral-muted)', padding: '48px' }}>
           Loading notes...
         </div>
       ) : displayNotes.length === 0 ? (
-        <div style={{
-          backgroundColor: 'white', borderRadius: '10px',
-          padding: '48px', textAlign: 'center',
-          border: '1px dashed #e2e8f0'
-        }}>
-          <div style={{ fontSize: '32px', marginBottom: '12px' }}>📝</div>
-          <div style={{ color: '#64748b', fontSize: '14px' }}>
+        <div className="empty-state-card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+          <Icons.FileText size={24} style={{ color: 'var(--neutral-muted)' }} />
+          <div style={{ color: 'var(--neutral-muted)', fontSize: '14px' }}>
             No notes found. Visit notes are submitted by coordinators after patient visits.
           </div>
         </div>

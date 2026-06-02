@@ -65,15 +65,24 @@ class WellnessLogResponse(BaseModel):
 
 @router.post("/send-checkins")
 async def send_daily_checkins(db: Session = Depends(get_db)):
-    today  = date.today()
+    import pytz
     results = []
 
     patients = db.query(Patient).filter(Patient.telegram_chat_id.isnot(None)).all()
 
     for patient in patients:
+        tz_name = patient.timezone if patient.timezone else "Asia/Kolkata"
+        try:
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            tz = pytz.timezone("Asia/Kolkata")
+        local_now = datetime.now(tz)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        utc_today_start = local_start.astimezone(pytz.utc).replace(tzinfo=None)
+
         existing = db.query(WellnessLog).filter(
             WellnessLog.patient_id == patient.id,
-            WellnessLog.check_in_date >= datetime.combine(today, datetime.min.time()),
+            WellnessLog.check_in_date >= utc_today_start,
         ).first()
         if existing:
             continue
@@ -107,11 +116,20 @@ async def handle_wellness_response(
     if not patient:
         return {"status": "patient_not_found"}
 
-    today = date.today()
+    import pytz
+    tz_name = patient.timezone if patient.timezone else "Asia/Kolkata"
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone("Asia/Kolkata")
+    local_now = datetime.now(tz)
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    utc_today_start = local_start.astimezone(pytz.utc).replace(tzinfo=None)
+
     log   = db.query(WellnessLog).filter(
         WellnessLog.patient_id == patient.id,
         WellnessLog.status     == "pending",
-        WellnessLog.check_in_date >= datetime.combine(today, datetime.min.time()),
+        WellnessLog.check_in_date >= utc_today_start,
     ).first()
 
     if not log:
@@ -120,6 +138,7 @@ async def handle_wellness_response(
     result = await interpret_wellness_reply(
         patient_name=patient.name,
         message=message,
+        patient_id=patient.id,
     )
 
     log.status           = "responded"

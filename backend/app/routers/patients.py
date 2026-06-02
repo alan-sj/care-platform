@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.models import Patient
-from app.schemas.schemas import PatientCreate, PatientResponse, OnboardingLinkResponse
+from app.schemas.schemas import PatientCreate, PatientResponse, OnboardingLinkResponse, PatientUpdate
 from typing import List
 import uuid
 import random
@@ -80,3 +80,18 @@ def delete_patient(patient_id: uuid.UUID, db: Session = Depends(get_db)):
     db.delete(patient)
     db.commit()
     return {"message": "Patient deleted"}
+
+
+@router.put("/{patient_id}", response_model=PatientResponse)
+def update_patient(patient_id: uuid.UUID, payload: PatientUpdate, db: Session = Depends(get_db)):
+    db_patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not db_patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    data = payload.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(db_patient, k, v)
+
+    db.commit()
+    db.refresh(db_patient)
+    return db_patient

@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.models.models import (
-    Patient, Medication, MedicationLog, Alert,
+    Patient, Medication, MedicationLog, Alert, User,
     MedicationStatus, AlertType, AlertSeverity, AlertStatus
 )
 from app.services.notification_service import send_telegram_message, notify_coordinator
 from datetime import datetime, timedelta
+import pytz
+import uuid
 
 router = APIRouter(prefix="/reminders", tags=["Reminders"])
 
@@ -14,111 +16,141 @@ router = APIRouter(prefix="/reminders", tags=["Reminders"])
 @router.post("/send-due")
 async def send_due_reminders(db: Session = Depends(get_db)):
     now = datetime.utcnow()
-    current_hour = now.hour
-    current_minute = now.minute
     results = []
 
     print(f"Checking reminders at UTC: {now}")
 
-    patients = db.query(Patient).all()
+    # Fetch patients who have active medications, eager-loading the medications list to resolve N+1 queries
+    patients = db.query(Patient).options(
+        joinedload(Patient.medications)
+    ).filter(
+        Patient.telegram_chat_id.isnot(None),
+        Patient.medications.any(Medication.active == True)
+    ).all()
 
     for patient in patients:
-        if not patient.telegram_chat_id:
-            continue
+        # Determine patient's local timezone (defaults to Asia/Kolkata if not set)
+        tz_name = patient.timezone or "Asia/Kolkata"
+        try:
+            patient_tz = pytz.timezone(tz_name)
+        except Exception:
+            patient_tz = pytz.timezone("Asia/Kolkata")
 
-        medications = db.query(Medication).filter(
-            Medication.patient_id == patient.id,
-            Medication.active == True
-        ).all()
+        # Convert current UTC time to patient local time
+        local_now = pytz.utc.localize(now).astimezone(patient_tz)
+        current_hour = local_now.hour
+        current_minute = local_now.minute
 
-        # Collect all medications due now for this patient
         due_medications = []
 
-        for medication in medications:
-            if not medication.times:
+        for medication in patient.medications:
+            if not medication.active or not medication.times:
                 continue
 
             for time_str in medication.times:
                 try:
                     hour, minute = map(int, time_str.split(":"))
-                except:
+                except Exception:
                     continue
 
+                # Compute time difference in minutes
                 med_total = hour * 60 + minute
                 now_total = current_hour * 60 + current_minute
                 diff = med_total - now_total
 
+                # If scheduled within the next 15 minutes
                 if not (0 <= diff <= 15):
                     continue
 
-                # Check if already sent reminder today for this med at this time
-                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                today_end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+                # Calculate scheduled time as a naive UTC datetime
+                try:
+                    local_scheduled = patient_tz.localize(
+                        datetime.combine(local_now.date(), datetime.min.time())
+                    ).replace(hour=hour, minute=minute)
+                    utc_scheduled = local_scheduled.astimezone(pytz.utc).replace(tzinfo=None)
+                except Exception:
+                    continue
 
+                # Check if log already exists
                 existing_log = db.query(MedicationLog).filter(
                     MedicationLog.patient_id == patient.id,
                     MedicationLog.medication_id == medication.id,
-                    MedicationLog.scheduled_time == now.replace(hour=hour, minute=minute, second=0, microsecond=0),
-                    MedicationLog.created_at >= today_start,
-                    MedicationLog.created_at <= today_end
+                    MedicationLog.scheduled_time == utc_scheduled
                 ).first()
 
                 if existing_log:
-                    print(f"Already logged for {medication.name} at {time_str} today, skipping")
                     continue
 
-                due_medications.append((medication, time_str, hour, minute))
+                due_medications.append((medication, time_str, utc_scheduled))
 
         if not due_medications:
             continue
 
-        # Build batched reminder message
-        if len(due_medications) == 1:
-            med, time_str, hour, minute = due_medications[0]
+        # Create log entries in DB first to generate IDs (using flush)
+        created_logs = []
+        for med, time_str, utc_scheduled in due_medications:
+            log = MedicationLog(
+                patient_id=patient.id,
+                medication_id=med.id,
+                scheduled_time=utc_scheduled,
+                status=MedicationStatus.pending
+            )
+            db.add(log)
+            created_logs.append(log)
+
+        db.flush()  # Populate generated UUIDs for the callback buttons
+
+        # Build batched reminder message and interactive inline keyboard buttons
+        inline_keyboard = []
+        if len(created_logs) == 1:
+            log = created_logs[0]
+            med_name = log.medication.name if log.medication else "medication"
+            med_dosage = log.medication.dosage if log.medication else ""
             message = (
                 f"💊 Hi {patient.name}! Time to take your medication:\n\n"
-                f"<b>{med.name} {med.dosage or ''}</b>\n\n"
-                f"Please reply with:\n"
-                f"✅ <b>yes</b> — took it\n"
-                f"❌ <b>no</b> — haven't taken it\n"
-                f"🤒 or tell us how you're feeling"
+                f"<b>{med_name} {med_dosage}</b>\n\n"
+                f"Please confirm if you've taken it using the buttons below, or reply with how you're feeling."
             )
+            inline_keyboard.append([
+                {"text": "✅ Took It", "callback_data": f"med:confirmed:{log.id}"},
+                {"text": "❌ Missed", "callback_data": f"med:missed:{log.id}"}
+            ])
         else:
             med_lines = "\n".join(
-                f"{i+1}. <b>{med.name} {med.dosage or ''}</b>"
-                for i, (med, _, _, _) in enumerate(due_medications)
+                f"{i+1}. <b>{log.medication.name} {log.medication.dosage or ''}</b>"
+                for i, log in enumerate(created_logs)
             )
             message = (
                 f"💊 Hi {patient.name}! Time for your medications:\n\n"
                 f"{med_lines}\n\n"
-                f"Please reply with:\n"
-                f"✅ <b>all</b> — took all of them\n"
-                f"🔢 <b>1</b> or <b>2</b> — only took specific ones\n"
-                f"❌ <b>no</b> — haven't taken any\n"
-                f"🤒 or tell us how you're feeling"
+                f"Please confirm using the buttons below, or reply with how you're feeling."
             )
+            # Individual confirmation rows
+            for log in created_logs:
+                med_name = log.medication.name if log.medication else "med"
+                inline_keyboard.append([
+                    {"text": f"✅ Took {med_name}", "callback_data": f"med:confirmed:{log.id}"},
+                    {"text": f"❌ Missed", "callback_data": f"med:missed:{log.id}"}
+                ])
+            # Batch options row
+            log_ids_str = ",".join(str(log.id) for log in created_logs)
+            inline_keyboard.append([
+                {"text": "✅ Took All", "callback_data": f"med_batch:confirmed:{log_ids_str}"},
+                {"text": "❌ Missed All", "callback_data": f"med_batch:missed:{log_ids_str}"}
+            ])
 
-        await send_telegram_message(patient.telegram_chat_id, message)
+        reply_markup = {"inline_keyboard": inline_keyboard}
+        await send_telegram_message(patient.telegram_chat_id, message, reply_markup=reply_markup)
 
-        # Log each due medication as pending
-        for med, time_str, hour, minute in due_medications:
-            med_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            log = MedicationLog(
-                patient_id=patient.id,
-                medication_id=med.id,
-                scheduled_time=med_time,
-                status=MedicationStatus.pending
-            )
-            db.add(log)
+        for log in created_logs:
             results.append({
                 "patient": patient.name,
-                "medication": med.name,
-                "scheduled_time": time_str,
+                "medication": log.medication.name if log.medication else "Unknown",
+                "scheduled_time": str(log.scheduled_time),
                 "status": "reminder_sent"
             })
 
-        db.commit()
-
+    db.commit()
     return {"status": "done", "results": results}
 
 
@@ -130,7 +162,7 @@ async def check_missed_reminders(db: Session = Depends(get_db)):
 
     pending_logs = db.query(MedicationLog).filter(
         MedicationLog.status == MedicationStatus.pending,
-        MedicationLog.created_at <= cutoff
+        MedicationLog.scheduled_time <= cutoff
     ).all()
 
     for log in pending_logs:
@@ -150,7 +182,6 @@ async def check_missed_reminders(db: Session = Depends(get_db)):
             status=AlertStatus.open
         )
         db.add(alert)
-        db.commit()
 
         coordinator = patient.coordinator
         if coordinator and coordinator.active and coordinator.telegram_chat_id:
@@ -176,4 +207,5 @@ async def check_missed_reminders(db: Session = Depends(get_db)):
             "status": "marked_missed"
         })
 
+    db.commit()
     return {"status": "done", "results": results}

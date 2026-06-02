@@ -2,9 +2,10 @@
 Telegram webhook router.
 Handles:
   - /start deep-link onboarding (patient + family)
-  - Medication reminder replies  → medication_agent
-  - Wellness check-in replies    → wellness_agent
-  - Unrecognised messages        → friendly fallback
+  - Medication reminder replies (inline button callbacks or text replies via medication_agent)
+  - Wellness check-in replies (wellness_agent)
+  - Unrecognised messages (friendly fallback)
+  - Webhook secret token validation
 """
 
 from fastapi import APIRouter, Request, Depends
@@ -18,13 +19,16 @@ from app.models.models import (
 )
 from app.agents.medication_agent import interpret_patient_reply
 from app.services.notification_service import send_telegram_message, notify_coordinator
+from app.routers.scheduling import VisitSchedule
 
 import os
+import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET")
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -117,13 +121,30 @@ def _has_pending_wellness(patient_id, db: Session) -> bool:
     """Check if patient has an unanswered wellness check-in today."""
     try:
         from app.routers.wellness import WellnessLog
-        today = date.today()
+        import pytz
+        
+        patient = db.query(Patient).filter(Patient.id == patient_id).first()
+        if not patient:
+            return False
+            
+        tz_name = patient.timezone if patient.timezone else "Asia/Kolkata"
+        try:
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            tz = pytz.timezone("Asia/Kolkata")
+            
+        # Get patient's local midnight in UTC
+        local_now = datetime.now(tz)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        utc_today_start = local_start.astimezone(pytz.utc).replace(tzinfo=None)
+        
         return db.query(WellnessLog).filter(
             WellnessLog.patient_id    == patient_id,
             WellnessLog.status        == "pending",
-            WellnessLog.check_in_date >= datetime.combine(today, datetime.min.time()),
+            WellnessLog.check_in_date >= utc_today_start,
         ).first() is not None
-    except Exception:
+    except Exception as e:
+        print(f"Error checking pending wellness: {e}")
         return False
 
 
@@ -140,7 +161,154 @@ def _has_pending_medication(patient_id, db: Session) -> bool:
 @router.post("/telegram")
 async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
     try:
-        data    = await request.json()
+        # ── 1. Secure Webhook Signature Token ─────────────────────────────────
+        if TELEGRAM_WEBHOOK_SECRET:
+            header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+            if header_secret != TELEGRAM_WEBHOOK_SECRET:
+                print("Webhook security check failed: unauthorized secret token.")
+                return {"status": "unauthorized"}
+
+        data = await request.json()
+
+        # ── 2. Handle Inline Keyboard Callback Queries ─────────────────────────
+        if "callback_query" in data:
+            callback_query = data["callback_query"]
+            chat_id = callback_query["message"]["chat"]["id"]
+            callback_data = callback_query["data"]
+            sender = callback_query["from"].get("first_name", "Patient")
+
+            # Find patient linked to Telegram Chat
+            patient = db.query(Patient).filter(Patient.telegram_chat_id == chat_id).first()
+            if not patient:
+                return {"status": "patient_not_found"}
+
+            parts = callback_data.split(":")
+            action = parts[0]
+            status_str = parts[1]  # "confirmed" or "missed"
+
+            coordinator = patient.coordinator
+
+            if action == "med":
+                log_id = uuid.UUID(parts[2])
+                log = db.query(MedicationLog).filter(MedicationLog.id == log_id).first()
+                if log:
+                    valid_states = ["confirmed", "missed", "flagged"]
+                    log.status = MedicationStatus[status_str] if status_str in valid_states else MedicationStatus.pending
+                    log.patient_reply = f"[Button Click] {status_str.upper()}"
+                    log.ai_interpretation = status_str
+                    if status_str == "confirmed":
+                        log.confirmed_at = datetime.utcnow()
+
+                    if status_str in ["missed", "flagged"]:
+                        alert = Alert(
+                            patient_id=patient.id,
+                            type=AlertType.missed_medication if status_str == "missed" else AlertType.flagged,
+                            severity=AlertSeverity.high if status_str == "missed" else AlertSeverity.medium,
+                            message=f"{patient.name} confirmed missed medication: {log.medication.name if log.medication else 'Medication'}",
+                            status=AlertStatus.open,
+                        )
+                        db.add(alert)
+                        if coordinator and coordinator.active and coordinator.telegram_chat_id:
+                            await notify_coordinator(
+                                coordinator_chat_id=coordinator.telegram_chat_id,
+                                patient_name=patient.name,
+                                alert_type=alert.type.value,
+                                severity=alert.severity.value,
+                                message=alert.message,
+                            )
+                    db.commit()
+
+                    med_name = log.medication.name if log.medication else "your medication"
+                    feedback_text = (
+                        f"✅ Got it, {patient.name}! You confirmed taking {med_name}. Stay healthy! 😊"
+                        if status_str == "confirmed" else
+                        f"⚠️ Thank you for letting us know, {patient.name}. We've logged that you missed {med_name}. Take care! ❤️"
+                    )
+                    await send_telegram_message(chat_id, feedback_text)
+
+            elif action == "med_batch":
+                log_ids = [uuid.UUID(lid) for lid in parts[2].split(",")]
+                logs = db.query(MedicationLog).filter(MedicationLog.id.in_(log_ids)).all()
+
+                for log in logs:
+                    log.status = MedicationStatus[status_str]
+                    log.patient_reply = f"[Button Batch Click] {status_str.upper()}"
+                    log.ai_interpretation = status_str
+                    if status_str == "confirmed":
+                        log.confirmed_at = datetime.utcnow()
+
+                    if status_str in ["missed", "flagged"]:
+                        alert = Alert(
+                            patient_id=patient.id,
+                            type=AlertType.missed_medication if status_str == "missed" else AlertType.flagged,
+                            severity=AlertSeverity.high if status_str == "missed" else AlertSeverity.medium,
+                            message=f"{patient.name} confirmed missed medications in batch.",
+                            status=AlertStatus.open,
+                        )
+                        db.add(alert)
+                        if coordinator and coordinator.active and coordinator.telegram_chat_id:
+                            await notify_coordinator(
+                                coordinator_chat_id=coordinator.telegram_chat_id,
+                                patient_name=patient.name,
+                                alert_type=alert.type.value,
+                                severity=alert.severity.value,
+                                message=alert.message,
+                            )
+                db.commit()
+
+                feedback_text = (
+                    f"✅ Got it, {patient.name}! You confirmed taking all medications. Stay healthy! 😊"
+                    if status_str == "confirmed" else
+                    f"⚠️ Thank you for letting us know, {patient.name}. We've logged that you missed all medications. Take care! ❤️"
+                )
+                await send_telegram_message(chat_id, feedback_text)
+
+            elif action == "visit":
+                visit_id = uuid.UUID(parts[2])
+                visit = db.query(VisitSchedule).filter(VisitSchedule.id == visit_id).first()
+                if visit:
+                    lang = patient.language.value if patient.language else "en"
+                    if status_str == "yes":
+                        visit.status = "confirmed"
+                        db.commit()
+
+                        feedback_messages = {
+                            "en": f"✅ Thank you {patient.name}! Your visit has been confirmed for today at {visit.time_slot or 'today'}.",
+                            "ar": f"✅ شكراً {patient.name}! تم تأكيد زيارتك اليوم في تمام الساعة {visit.time_slot or 'اليوم'}.",
+                            "ml": f"✅ നന്ദി {patient.name}! നിങ്ങളുടെ ഇന്നത്തെ സന്ദർശനം സമയം {visit.time_slot or 'ഇന്ന്'} ഉറപ്പിച്ചു കഴിഞ്ഞു."
+                        }
+                        await send_telegram_message(chat_id, feedback_messages.get(lang, feedback_messages["en"]))
+
+                        # Notify coordinator
+                        if coordinator and coordinator.active and coordinator.telegram_chat_id:
+                            coord_msg = (
+                                f"✅ <b>Visit Confirmed by Patient</b>\n\n"
+                                f"<b>{patient.name}</b> has confirmed the visit scheduled for today at <b>{visit.time_slot or 'today'}</b>."
+                            )
+                            await send_telegram_message(coordinator.telegram_chat_id, coord_msg)
+                    else:
+                        # Mark as cancelled
+                        visit.status = "cancelled"
+                        db.commit()
+
+                        feedback_messages = {
+                            "en": f"⚠️ Thanks for letting us know, {patient.name}. We have informed your coordinator that this time does not work for you.",
+                            "ar": f"⚠️ شكراً لإعلامنا {patient.name}. لقد أبلغنا المنسق بأن هذا الوقت لا يناسبك.",
+                            "ml": f"⚠️ അറിയിച്ചതിന് നന്ദി {patient.name}. ഈ സമയം നിങ്ങൾക്ക് സൗകര്യപ്രദമല്ല എന്ന് ഞങ്ങൾ കോർഡിനേറ്ററെ അറിയിച്ചിട്ടുണ്ട്."
+                        }
+                        await send_telegram_message(chat_id, feedback_messages.get(lang, feedback_messages["en"]))
+
+                        # Notify coordinator
+                        if coordinator and coordinator.active and coordinator.telegram_chat_id:
+                            coord_msg = (
+                                f"❌ <b>Visit Declined by Patient</b>\n\n"
+                                f"<b>{patient.name}</b> has declined the visit scheduled for today at <b>{visit.time_slot or 'today'}</b>. Please contact them to reschedule."
+                            )
+                            await send_telegram_message(coordinator.telegram_chat_id, coord_msg)
+
+            return {"status": "ok"}
+
+        # ── 3. Handle Standard Text Messages ──────────────────────────────────
         message = data.get("message", {})
         chat_id = message.get("chat", {}).get("id")
         text    = message.get("text", "")
@@ -151,7 +319,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
 
         print(f"Message from {sender} ({chat_id}): {text}")
 
-        # /start — onboarding
+        # /start command onboarding
         if text.startswith("/start"):
             await handle_start_command(chat_id, text, sender, db)
             return {"status": "ok"}
@@ -159,7 +327,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
         if text.startswith("/"):
             return {"status": "ok"}
 
-        # Find patient
+        # Find patient linked to Telegram Chat
         patient = db.query(Patient).filter(Patient.telegram_chat_id == chat_id).first()
         if not patient:
             await send_telegram_message(
@@ -169,7 +337,93 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "ok"}
 
-        # ── Route: wellness check-in reply ────────────────────────────────────
+        # ── Route: Visit Rescheduling Check ────────────────────────────────────
+        from app.models.models import User
+        from datetime import timedelta
+        
+        # Check if there is an active planned visit today
+        visit = db.query(VisitSchedule).filter(
+            VisitSchedule.patient_id == patient.id,
+            VisitSchedule.schedule_date == date.today(),
+            VisitSchedule.status == "planned",
+        ).first()
+
+        if visit:
+            from app.agents.reschedule_agent import interpret_reschedule_request
+            coordinator = db.query(User).filter(User.id == visit.coordinator_id).first()
+            cname = coordinator.name if coordinator else "your coordinator"
+            
+            res_result = await interpret_reschedule_request(
+                patient_name=patient.name,
+                coordinator_name=cname,
+                visit_time=visit.time_slot or "12:00",
+                visit_date=str(visit.schedule_date),
+                message=text,
+                patient_id=patient.id,
+            )
+
+            if res_result.get("is_reschedule_request"):
+                requested_time = res_result.get("requested_time")
+                requested_date = res_result.get("requested_date")
+                
+                # Check coordinator convenience / availability
+                # A coordinator is busy if they already have another visit scheduled at that date + time
+                has_conflict = False
+                target_date = visit.schedule_date
+                
+                if requested_date:
+                    from datetime import datetime
+                    try:
+                        if requested_date == "tomorrow":
+                            target_date = date.today() + timedelta(days=1)
+                        else:
+                            target_date = datetime.strptime(requested_date, "%Y-%m-%d").date()
+                    except Exception:
+                        pass
+                
+                time_to_check = requested_time or visit.time_slot
+                if time_to_check and visit.coordinator_id:
+                    conflict = db.query(VisitSchedule).filter(
+                        VisitSchedule.coordinator_id == visit.coordinator_id,
+                        VisitSchedule.schedule_date == target_date,
+                        VisitSchedule.time_slot == time_to_check,
+                        VisitSchedule.status == "planned",
+                        VisitSchedule.id != visit.id,
+                    ).first()
+                    if conflict:
+                        has_conflict = True
+
+                if has_conflict:
+                    lang = patient.language.value if patient.language else "en"
+                    conflict_replies = {
+                        "en": f"Sorry {patient.name}, {cname} is not available at {time_to_check} on {target_date}. Would another time work? 😊",
+                        "ar": f"عذراً {patient.name}، {cname} ليس متاحاً في {time_to_check} يوم {target_date}. هل يناسبك وقت آخر؟ 😊",
+                        "ml": f"ക്ഷമിക്കണം {patient.name}, {cname}-ന് {target_date}-ൽ {time_to_check}-ന് വരാൻ കഴിയില്ല. മറ്റൊരു സമയം പറയാമോ? 😊"
+                    }
+                    await send_telegram_message(chat_id, conflict_replies.get(lang, conflict_replies["en"]))
+                    return {"status": "ok"}
+                else:
+                    # Update the visit details in the database
+                    if requested_time:
+                        visit.time_slot = requested_time
+                    if requested_date:
+                        visit.schedule_date = target_date
+                    db.commit()
+
+                    # Notify patient
+                    await send_telegram_message(chat_id, res_result["reply"])
+
+                    # Notify coordinator on Telegram
+                    if coordinator and coordinator.telegram_chat_id:
+                        coord_msg = (
+                            f"🔔 <b>Visit Rescheduled by Patient</b>\n\n"
+                            f"The visit for <b>{patient.name}</b> has been rescheduled to <b>{target_date} at {visit.time_slot}</b>."
+                        )
+                        await send_telegram_message(coordinator.telegram_chat_id, coord_msg)
+
+                    return {"status": "ok"}
+
+        # Route: wellness check-in response
         if _has_pending_wellness(patient.id, db):
             from app.routers.wellness import handle_wellness_response
             await handle_wellness_response(
@@ -179,7 +433,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "ok"}
 
-        # ── Route: medication reminder reply ──────────────────────────────────
+        # Route: medication text replies (e.g., patient typed a custom explanation)
         if _has_pending_medication(patient.id, db):
             pending_logs = db.query(MedicationLog).filter(
                 MedicationLog.patient_id == patient.id,
@@ -202,10 +456,12 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
                 })
                 log_map[med.name] = log
 
+            # Call AI Medication Agent to interpret the patient's custom text reply
             result = await interpret_patient_reply(
                 patient_name=patient.name,
                 medications=meds_for_agent,
                 message=text,
+                patient_id=patient.id,
             )
 
             coordinator = patient.coordinator
@@ -253,7 +509,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             await send_telegram_message(chat_id, result["reply"])
             return {"status": "ok"}
 
-        # ── Fallback: no pending task ─────────────────────────────────────────
+        # Fallback: no pending flow, send default warm message
         await send_telegram_message(
             chat_id,
             f"Thank you for your message, {patient.name}! "

@@ -1,56 +1,17 @@
 """
-Summary Agent — ADK-native rewrite.
-
-Replaces the old direct google-genai call with a proper ADK Agent + tool.
+Summary Agent — ADK-native implementation.
 Generates a warm, family-friendly daily medication summary.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any
-
 from google.adk import Agent
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from app.services.session_service import session_service
 
+from typing import Any
 
-_session_service = InMemorySessionService()
 APP_NAME = "summary_agent_app"
-
-
-# ── Tool: aggregate log data ──────────────────────────────────────────────────
-
-def aggregate_medication_logs(
-    patient_name: str,
-    total: int,
-    confirmed: int,
-    missed: int,
-    flagged: int,
-    log_details: str,
-) -> dict[str, Any]:
-    """
-    Aggregate today's medication log data for a patient.
-
-    Args:
-        patient_name: Name of the patient.
-        total:        Total medications scheduled today.
-        confirmed:    Number taken and confirmed.
-        missed:       Number missed (no response or explicit "no").
-        flagged:      Number taken but with reported health concerns.
-        log_details:  Multiline string with per-medication details.
-
-    Returns:
-        The same data as a dict for the agent to summarise.
-    """
-    return {
-        "patient_name": patient_name,
-        "total": total,
-        "confirmed": confirmed,
-        "missed": missed,
-        "flagged": flagged,
-        "log_details": log_details,
-    }
 
 
 # ── Agent definition ──────────────────────────────────────────────────────────
@@ -58,15 +19,14 @@ def aggregate_medication_logs(
 SUMMARY_AGENT_INSTRUCTION = """
 You are a compassionate care assistant writing a daily update for a patient's family.
 
-Steps:
-1. Call the `aggregate_medication_logs` tool with the data provided.
-2. Write a warm, human, family-friendly summary of the patient's day.
+Your job is to write a warm, human, family-friendly summary of the patient's day based on the provided daily care updates (medication logs, wellness check-in details, and/or coordinator visit observations).
 
 Rules:
 - Keep it under 200 words.
 - Sound human — not clinical, not robotic.
-- Mention what went well.
-- Mention any concerns gently, without alarming the reader.
+- Integrate the patient's wellness check-in details (mood, pain, sleep, wellness score) and coordinator visit observations (if present) naturally.
+- Mention what went well (e.g., good mood, eating well, successful visits).
+- Mention any concerns (e.g., back pain, fatigue, missed medication) gently and supportively, without alarm.
 - Never use medical jargon.
 - Always end on a positive or reassuring note.
 - Write as if speaking to a worried family member who loves this person.
@@ -75,9 +35,8 @@ Rules:
 
 summary_agent = Agent(
     name="summary_agent",
-    model="gemini-2.5-flash-lite",
+    model="gemini-flash-lite-latest",
     instruction=SUMMARY_AGENT_INSTRUCTION,
-    tools=[aggregate_medication_logs],
 )
 
 
@@ -86,69 +45,90 @@ summary_agent = Agent(
 async def generate_family_summary(
     patient_name: str,
     logs: list[dict],
+    wellness_data: dict | None = None,
+    visit_note_data: dict | None = None,
+    patient_id: Any = None,
     session_id: str | None = None,
 ) -> str:
     """
     Generate a family-friendly daily summary for a patient.
-
-    Args:
-        patient_name: Patient's name.
-        logs:         List of dicts with keys: medication, time, status, reply.
-        session_id:   Optional ADK session ID.
-
-    Returns:
-        Plain-text summary string.
+    Uses direct Gemini client call.
     """
     import uuid
 
-    session_id = session_id or str(uuid.uuid4())
+    session_id = session_id or (f"summary_{patient_id}" if patient_id else str(uuid.uuid4()))
 
-    confirmed = [l for l in logs if l["status"] == "confirmed"]
-    missed    = [l for l in logs if l["status"] == "missed"]
-    flagged   = [l for l in logs if l["status"] == "flagged"]
+    details = ""
+    if logs:
+        confirmed = [l for l in logs if l["status"] == "confirmed"]
+        missed    = [l for l in logs if l["status"] == "missed"]
+        flagged   = [l for l in logs if l["status"] == "flagged"]
 
-    details = "\n".join(
-        f"- {l['medication']} at {l['time']}: {l['status']} — {l.get('reply', 'No reply')}"
-        for l in logs
-    )
+        med_details = "\n".join(
+            f"- {l['medication']} at {l['time']}: {l['status']} — {l.get('reply', 'No reply')}"
+            for l in logs
+        )
+        details += (
+            f"Medication Status:\n"
+            f"- Total scheduled: {len(logs)}\n"
+            f"- Confirmed taken: {len(confirmed)}\n"
+            f"- Missed: {len(missed)}\n"
+            f"- Flagged concerns: {len(flagged)}\n"
+            f"Individual log entries:\n{med_details}\n\n"
+        )
+    else:
+        confirmed = []
+
+    if wellness_data:
+        details += (
+            f"Today's Wellness Check-in details:\n"
+            f"- Health/Wellness Score: {wellness_data.get('score')}/10\n"
+            f"- Patient reported mood: {wellness_data.get('mood')}\n"
+            f"- Patient reported pain: {wellness_data.get('pain')}\n"
+            f"- Patient reported eating: {wellness_data.get('eating')}\n"
+            f"- Patient reported sleep: {wellness_data.get('sleep')}\n"
+            f"- Noted health concerns: {wellness_data.get('concerns') or 'None'}\n\n"
+        )
+
+    if visit_note_data:
+        details += (
+            f"Today's Visit from Care Coordinator:\n"
+            f"- Summary of visit: {visit_note_data.get('summary')}\n"
+            f"- Coordinator observations: {visit_note_data.get('observations')}\n"
+            f"- Care coordinator risk level: {visit_note_data.get('risk_level')}\n\n"
+        )
 
     prompt = (
-        f"Patient: {patient_name}\n"
-        f"Total medications scheduled: {len(logs)}\n"
-        f"Confirmed taken: {len(confirmed)}\n"
-        f"Missed: {len(missed)}\n"
-        f"Flagged concerns: {len(flagged)}\n\n"
-        f"Details:\n{details}\n\n"
+        f"Patient: {patient_name}\n\n"
+        f"Today's Care Updates:\n"
+        f"{details}\n"
         "Generate the family summary now."
     )
 
-    runner = Runner(
-        agent=summary_agent,
-        app_name=APP_NAME,
-        session_service=_session_service,
-    )
+    # Standardize session creation to keep ADK session storage updated/initialized
+    try:
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id="system",
+            session_id=session_id,
+        )
+    except Exception:
+        pass
 
-    session = await _session_service.create_session(
-        app_name=APP_NAME,
-        user_id="system",
-        session_id=session_id,
-    )
+    from app.services.gemini_service import generate_content_with_retry
 
-    from google.genai import types
-
-    final_text = ""
-    async for event in runner.run_async(
-        user_id="system",
-        session_id=session.id,
-        new_message=types.Content(role="user", parts=[types.Part(text=prompt)]),
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    final_text += part.text
-
-    if final_text.strip():
-        return final_text.strip()
+    try:
+        final_text = await generate_content_with_retry(
+            prompt=prompt,
+            system_instruction=SUMMARY_AGENT_INSTRUCTION,
+            response_schema=None,
+            model="gemini-flash-lite-latest",
+        )
+        if final_text:
+            return final_text
+    except Exception as e:
+        import logging
+        logging.error(f"Error calling summary agent directly: {e}")
 
     # Fallback
     confirmed_count = len(confirmed)

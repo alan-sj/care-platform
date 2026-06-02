@@ -206,6 +206,7 @@ async def generate_schedule(db: Session = Depends(get_db)):
     )
 
     # Save visits to DB
+    db_visits = []
     for visit in schedule.get("visits", []):
         db_visit = VisitSchedule(
             patient_id     = uuid.UUID(visit["patient_id"]),
@@ -218,8 +219,53 @@ async def generate_schedule(db: Session = Depends(get_db)):
             status         = "planned",
         )
         db.add(db_visit)
+        db_visits.append((db_visit, visit.get("coordinator_name", "your coordinator")))
 
     db.commit()
+
+    # Notify patients on Telegram
+    patient_map = {p.id: p for p in patients}
+    for db_visit, cname in db_visits:
+        patient = patient_map.get(db_visit.patient_id)
+        if not patient or not patient.telegram_chat_id:
+            continue
+
+        time_slot = db_visit.time_slot or "today"
+        lang = patient.language.value if patient.language else "en"
+
+        patient_messages = {
+            "en": (
+                f"🔔 <b>Care Visit Scheduled</b>\n\n"
+                f"Hi {patient.name}, your care coordinator <b>{cname}</b> is scheduled to visit you today at <b>{time_slot}</b>.\n\n"
+                f"Does this time work for you? Please select below:"
+            ),
+            "ar": (
+                f"🔔 <b>زيارة مجدولة اليوم</b>\n\n"
+                f"مرحباً {patient.name}، من المقرر أن يقوم منسق الرعاية الخاص بك <b>{cname}</b> بزيارتك اليوم في تمام الساعة <b>{time_slot}</b>.\n\n"
+                f"هل يناسبك هذا الوقت؟ يرجى الاختيار أدناه:"
+            ),
+            "ml": (
+                f"🔔 <b>കെയർ സന്ദർശനം</b>\n\n"
+                f"ഹലോ {patient.name}, നിങ്ങളുടെ കെയർ കോർഡിനേറ്റർ <b>{cname}</b> ഇന്ന് <b>{time_slot}</b>-ന് നിങ്ങളെ സന്ദർശിക്കാൻ വരുന്നുണ്ട്.\n\n"
+                f"ഈ സമയം നിങ്ങൾക്ക് സൗകര്യപ്രദമാണോ? താഴെ തിരഞ്ഞെടുക്കുക:"
+            ),
+        }
+
+        # Inline buttons
+        yes_btn = {"en": "✅ Yes", "ar": "✅ نعم", "ml": "✅ അതേ"}
+        no_btn = {"en": "❌ No", "ar": "❌ لا", "ml": "❌ അല്ല"}
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": yes_btn.get(lang, yes_btn["en"]), "callback_data": f"visit:yes:{db_visit.id}"},
+                    {"text": no_btn.get(lang, no_btn["en"]), "callback_data": f"visit:no:{db_visit.id}"}
+                ]
+            ]
+        }
+
+        msg = patient_messages.get(lang, patient_messages["en"])
+        await send_telegram_message(patient.telegram_chat_id, msg, reply_markup=reply_markup)
 
     # Notify coordinators on Telegram
     coordinator_map = {str(c.id): c for c in coordinators}

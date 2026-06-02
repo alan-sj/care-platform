@@ -18,7 +18,6 @@ from app.models.models import (
     AlertType, AlertSeverity, AlertStatus,
 )
 from app.services.notification_service import send_telegram_message, notify_coordinator
-from app.agents.copilot_agent import process_visit_note
 
 from datetime import datetime, date, timedelta
 from pydantic import BaseModel
@@ -86,6 +85,12 @@ class VisitNoteResponse(BaseModel):
 
 def _build_patient_context(patient_id, db: Session) -> dict:
     """Build patient history context for the copilot agent."""
+    import logging
+
+    # Query patient for timezone, baseline, and clinical conditions
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    conditions = patient.clinical_conditions if patient and patient.clinical_conditions else "Not specified"
+    baseline_bp = patient.baseline_bp if patient and patient.baseline_bp else "Unknown"
 
     # Recent wellness score
     recent_wellness = None
@@ -99,8 +104,8 @@ def _build_patient_context(patient_id, db: Session) -> dict:
         if wlog:
             recent_wellness = wlog.wellness_score
             recent_concerns = wlog.concerns
-    except Exception:
-        pass
+    except Exception as e:
+        logging.error(f"Error fetching patient wellness history context: {e}")
 
     # Recent medication status
     from app.models.models import MedicationLog, MedicationStatus
@@ -123,12 +128,113 @@ def _build_patient_context(patient_id, db: Session) -> dict:
     alert_text = "; ".join([a.message for a in open_alerts]) if open_alerts else "None"
 
     return {
-        "conditions":              "Not specified",  # extend later
-        "baseline_bp":             "Unknown",        # extend later
+        "conditions":              conditions,
+        "baseline_bp":             baseline_bp,
         "recent_wellness_score":   recent_wellness,
         "recent_medication_status": med_status,
         "recent_concerns":         recent_concerns or alert_text,
     }
+
+
+# ── Wellness merge helper ─────────────────────────────────────────────────────
+
+async def _merge_wellness_from_visit(
+    patient_id: uuid.UUID,
+    patient_name: str,
+    copilot_result: dict,
+    raw_note: str,
+    db: Session,
+):
+    """
+    Delegates entirely to the wellness agent's interpret_combined_wellness().
+    Passes clean separated arguments — coordinator signals and patient reply
+    kept distinct so the agent reasons over each source independently.
+
+    If a WellnessLog already exists today (any status) it is UPDATED in place
+    so the frontend always reads a single authoritative record per day.
+    """
+    from app.routers.wellness import WellnessLog
+    from app.agents.wellness_agent import interpret_combined_wellness
+
+    import pytz
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    tz_name = patient.timezone if patient and patient.timezone else "Asia/Kolkata"
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone("Asia/Kolkata")
+    local_now = datetime.now(tz)
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    utc_today_start = local_start.astimezone(pytz.utc).replace(tzinfo=None)
+
+    # ── Fetch today's existing wellness log (any status) ──────────────────────
+    existing_log = db.query(WellnessLog).filter(
+        WellnessLog.patient_id    == patient_id,
+        WellnessLog.check_in_date >= utc_today_start,
+    ).order_by(WellnessLog.created_at.desc()).first()
+
+    # ── Extract patient's own reply if they submitted one today ───────────────
+    # Guard against feeding back our own "[Visit note]" synthetic text.
+    patient_reply: str | None = None
+    if existing_log and existing_log.patient_reply:
+        if not existing_log.patient_reply.startswith("[Visit note]"):
+            patient_reply = existing_log.patient_reply
+
+    # ── Extract coordinator signals from copilot result ───────────────────────
+    observations   = copilot_result.get("observations", "") or ""
+    visit_summary  = copilot_result.get("visit_summary", "") or ""
+    risk_flags     = copilot_result.get("risk_flags", []) or []
+    vitals         = copilot_result.get("vitals", {}) or {}
+    follow_up_note = copilot_result.get("follow_up_note", "") or ""
+
+    vitals_text = ", ".join(
+        f"{k}: {v}" for k, v in vitals.items() if v and v != "null"
+    )
+
+    # ── Delegate all reasoning to the wellness agent ──────────────────────────
+    wellness_result = await interpret_combined_wellness(
+        patient_name=patient_name,
+        patient_reply=patient_reply,
+        coordinator_observations=observations,
+        coordinator_vitals=vitals_text,
+        coordinator_risk_flags=risk_flags,
+        coordinator_visit_summary=visit_summary,
+        coordinator_follow_up=follow_up_note,
+        patient_id=patient_id,
+    )
+
+    # ── Upsert: update existing log or create new one ─────────────────────────
+    if existing_log:
+        # Preserve the patient's original reply text — only update the
+        # scored fields so we don't lose their voice.
+        if not existing_log.patient_reply or existing_log.patient_reply.startswith("[Visit note]"):
+            existing_log.patient_reply = f"[Visit note] {raw_note[:300]}"
+
+        existing_log.status           = "responded"
+        existing_log.mood             = wellness_result.get("mood")
+        existing_log.pain             = wellness_result.get("pain")
+        existing_log.eating           = wellness_result.get("eating")
+        existing_log.sleep            = wellness_result.get("sleep")
+        existing_log.wellness_score   = wellness_result.get("wellness_score")
+        existing_log.concerns         = wellness_result.get("concerns")
+        existing_log.needs_escalation = wellness_result.get("needs_escalation", False)
+    else:
+        new_log = WellnessLog(
+            patient_id       = patient_id,
+            check_in_date    = datetime.utcnow(),
+            status           = "responded",
+            patient_reply    = f"[Visit note] {raw_note[:300]}",
+            mood             = wellness_result.get("mood"),
+            pain             = wellness_result.get("pain"),
+            eating           = wellness_result.get("eating"),
+            sleep            = wellness_result.get("sleep"),
+            wellness_score   = wellness_result.get("wellness_score"),
+            concerns         = wellness_result.get("concerns"),
+            needs_escalation = wellness_result.get("needs_escalation", False),
+        )
+        db.add(new_log)
+
+    return wellness_result
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -142,6 +248,8 @@ async def submit_visit_note(
     """
     Submit a visit note for a patient.
     The copilot agent processes it into structured clinical data.
+    The wellness agent then re-scores today's wellness using BOTH the
+    coordinator's observations AND any patient Telegram reply from today.
     """
     patient = db.query(Patient).filter(Patient.id == patient_id).first()
     if not patient:
@@ -159,15 +267,17 @@ async def submit_visit_note(
     # Build patient context for agent
     context = _build_patient_context(patient_id, db)
 
-    # Run copilot agent
+    # ── Run copilot agent ─────────────────────────────────────────────────────
+    from app.agents.copilot_agent import process_visit_note
     result = await process_visit_note(
         coordinator_name=coordinator_name,
         patient_name=patient.name,
         raw_note=payload.raw_note,
         patient_context=context,
+        patient_id=patient_id,
     )
 
-    # Save to DB
+    # ── Save visit note to DB ─────────────────────────────────────────────────
     note = VisitNote(
         patient_id        = patient_id,
         coordinator_id    = coordinator.id if coordinator else None,
@@ -185,7 +295,16 @@ async def submit_visit_note(
     )
     db.add(note)
 
-    # Create alert if risks found
+    # ── Merge wellness: coordinator observations + patient check-in ───────────
+    wellness_result = await _merge_wellness_from_visit(
+        patient_id=patient_id,
+        patient_name=patient.name,
+        copilot_result=result,
+        raw_note=payload.raw_note,
+        db=db,
+    )
+
+    # ── Create alert if copilot flagged risks ─────────────────────────────────
     risk_flags = result.get("risk_flags", [])
     risk_level = result.get("risk_level", "none")
 
@@ -204,7 +323,6 @@ async def submit_visit_note(
         )
         db.add(alert)
 
-        # Notify coordinator if high risk
         if risk_level == "high" and coordinator and coordinator.telegram_chat_id:
             await notify_coordinator(
                 coordinator_chat_id=coordinator.telegram_chat_id,
@@ -214,7 +332,22 @@ async def submit_visit_note(
                 message=f"Visit note flagged: {', '.join(risk_flags)}",
             )
 
-    # Mark visit schedule as completed if exists
+    # ── Create alert if wellness agent independently flagged escalation ───────
+    # (covers cases where copilot missed something the wellness agent caught)
+    if wellness_result.get("needs_escalation") and not risk_flags:
+        alert = Alert(
+            patient_id = patient_id,
+            type       = AlertType.flagged,
+            severity   = AlertSeverity.high,
+            message    = (
+                f"Wellness concern from visit note for {patient.name}: "
+                f"{wellness_result.get('concerns', 'See visit note')}"
+            ),
+            status     = AlertStatus.open,
+        )
+        db.add(alert)
+
+    # ── Mark visit schedule as completed if one exists ────────────────────────
     try:
         from app.routers.scheduling import VisitSchedule
         today_visit = db.query(VisitSchedule).filter(
@@ -225,10 +358,11 @@ async def submit_visit_note(
         if today_visit:
             today_visit.status = "completed"
             today_visit.notes  = result.get("visit_summary")
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.error(f"Error updating today's visit schedule state to completed: {e}")
 
-    # Send confirmation to coordinator
+    # ── Send confirmation to coordinator ──────────────────────────────────────
     if coordinator and coordinator.telegram_chat_id:
         quality_emoji = {
             "complete": "✅",
@@ -236,10 +370,17 @@ async def submit_visit_note(
             "minimal":  "❌",
         }.get(result.get("coordinator_note_quality", "partial"), "✅")
 
+        wellness_score = wellness_result.get("wellness_score")
+        wellness_line = (
+            f"🌡️ <b>Wellness score updated:</b> {wellness_score}/10\n"
+            if wellness_score is not None else ""
+        )
+
         summary_msg = (
             f"📋 <b>Visit Note Saved — {patient.name}</b>\n\n"
             f"{quality_emoji} Note quality: {result.get('coordinator_note_quality', 'partial').upper()}\n\n"
             f"<b>Summary:</b> {result.get('visit_summary', 'No summary')}\n\n"
+            f"{wellness_line}"
         )
 
         if risk_flags:
@@ -259,6 +400,7 @@ async def submit_visit_note(
         "status":     "processed",
         "note_id":    str(note.id),
         "structured": result,
+        "wellness":   wellness_result,
     }
 
 

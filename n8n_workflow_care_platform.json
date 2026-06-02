@@ -1,0 +1,173 @@
+{
+  "name": "Care Platform Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "e6bd0f06-d242-4f81-9b63-d14f4cf91d37",
+      "name": "Every 10 Minutes Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        380,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/reminders/send-due",
+        "options": {}
+      },
+      "id": "ccff1720-6d43-42e1-8cb5-d85f81f1883c",
+      "name": "Send Due Medications",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        600,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/reminders/check-missed",
+        "options": {}
+      },
+      "id": "e0d00f68-7c8a-4933-8a39-ec9f44db6060",
+      "name": "Check Missed Reminders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        600,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "time": "09:00"
+            }
+          ]
+        }
+      },
+      "id": "b96238b6-b51f-47ab-b295-8e7c10b7b15d",
+      "name": "Daily 9:00 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        380,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/wellness/send-checkins",
+        "options": {}
+      },
+      "id": "d0f0c08b-6258-450f-af50-3bf084803b9b",
+      "name": "Send Daily Checkins",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        600,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "time": "20:00"
+            }
+          ]
+        }
+      },
+      "id": "c1fcf81d-e6b7-4b1f-bc87-73d810842db1",
+      "name": "Daily 8:00 PM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        380,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8001/summaries/generate",
+        "options": {}
+      },
+      "id": "d2f2d01c-6d8a-442a-a9a7-96a86f9a0c20",
+      "name": "Generate Family Summaries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        600,
+        680
+      ]
+    }
+  ],
+  "connections": {
+    "Every 10 Minutes Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send Due Medications",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Missed Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 9:00 AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Checkins",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 8:00 PM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Generate Family Summaries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "care-platform-workflow-v3",
+  "meta": {
+    "templateId": "care-platform-v2"
+  }
+}

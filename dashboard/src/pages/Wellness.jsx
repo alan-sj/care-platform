@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getPatients } from '../api/patients'
 import { getLatestWellnessScore } from '../api/wellness'
+import * as Icons from '../components/Icons'
 
 const scoreColor = (score) => {
   if (!score) return { color: '#9ca3af', bg: '#f9fafb', label: 'No data' }
@@ -29,8 +30,8 @@ const scoreBar = (score) => {
   )
 }
 
-const moodEmoji = { good: '😊', okay: '😐', bad: '😔', unknown: '❓' }
-const painEmoji = { none: '✅', mild: '🟡', moderate: '🟠', severe: '🔴', unknown: '❓' }
+const moodLabel = { good: 'Good', okay: 'Okay', bad: 'Bad', unknown: 'Unknown' }
+const painLabel = { none: 'None', mild: 'Mild', moderate: 'Moderate', severe: 'Severe', unknown: 'Unknown' }
 
 export default function Wellness() {
   const navigate = useNavigate()
@@ -94,12 +95,13 @@ export default function Wellness() {
   const pill = (label, active, onClick) => (
     <button
       onClick={onClick}
+      className={`btn-premium ${active ? 'btn-success' : 'btn-primary-outline'}`}
       style={{
-        padding: '5px 14px', borderRadius: '20px', fontSize: '13px',
-        cursor: 'pointer', fontWeight: active ? '600' : '400',
-        border: active ? '1.5px solid #1e3a5f' : '1px solid #e5e7eb',
-        backgroundColor: active ? '#1e3a5f' : 'white',
-        color: active ? 'white' : '#374151'
+        padding: '6px 14px', borderRadius: '20px', fontSize: '13px',
+        fontWeight: active ? '600' : '400',
+        backgroundColor: active ? 'var(--primary-color)' : 'var(--card-bg)',
+        color: active ? '#ffffff' : 'var(--neutral-text)',
+        borderColor: active ? 'var(--primary-color)' : 'var(--neutral-border)'
       }}
     >
       {label}
@@ -107,31 +109,27 @@ export default function Wellness() {
   )
 
   return (
-    <div style={{ padding: '32px', backgroundColor: '#f8fafc', minHeight: '100vh' }}>
+    <div className="page-container">
       <div style={{ marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '24px', fontWeight: '700', color: '#1e3a5f', marginBottom: '4px' }}>
+        <h1 className="page-title" style={{ marginBottom: '4px' }}>
           Wellness Overview
         </h1>
-        <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>
-          Daily check-in scores across all patients
+        <p style={{ fontSize: '13px', color: 'var(--neutral-muted)', margin: 0 }}>
+          Daily check-in wellness records across all patients
         </p>
       </div>
 
       {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+      <div className="stats-grid" style={{ marginBottom: '28px' }}>
         {[
-          { label: 'Avg Score', value: avgScore ?? '—', color: '#1e3a5f' },
-          { label: 'Critical (≤4)', value: criticalCount, color: '#dc2626' },
-          { label: 'Good (≥8)', value: goodCount, color: '#16a34a' },
-          { label: 'No Check-in', value: noDataCount, color: '#9ca3af' },
+          { label: 'Avg Score', value: avgScore ?? '—', color: 'var(--primary-color)' },
+          { label: 'Critical (≤4)', value: criticalCount, color: 'var(--error-color)' },
+          { label: 'Good (≥8)', value: goodCount, color: 'var(--success-color)' },
+          { label: 'No Check-in', value: noDataCount, color: 'var(--neutral-muted)' },
         ].map(s => (
-          <div key={s.label} style={{
-            backgroundColor: 'white', borderRadius: '8px',
-            padding: '16px 18px', boxShadow: '0 1px 3px rgba(0,0,0,0.07)',
-            borderLeft: `3px solid ${s.color}`
-          }}>
-            <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>{s.label}</div>
-            <div style={{ fontSize: '28px', fontWeight: '700', color: s.color }}>{s.value}</div>
+          <div key={s.label} className="card-premium" style={{ padding: '16px 18px', marginBottom: 0 }}>
+            <div style={{ fontSize: '12px', color: 'var(--neutral-muted)', marginBottom: '6px', fontWeight: '600' }}>{s.label}</div>
+            <div style={{ fontSize: '28px', fontWeight: '800', color: s.color }}>{s.value}</div>
           </div>
         ))}
       </div>
@@ -148,9 +146,9 @@ export default function Wellness() {
           value={sortBy}
           onChange={e => setSortBy(e.target.value)}
           style={{
-            padding: '6px 12px', border: '1px solid #e5e7eb',
-            borderRadius: '6px', fontSize: '13px', backgroundColor: 'white',
-            cursor: 'pointer'
+            padding: '6px 12px', border: '1px solid var(--neutral-border)',
+            borderRadius: 'var(--radius-sm)', fontSize: '13px', backgroundColor: 'var(--card-bg)',
+            color: 'var(--neutral-dark)', cursor: 'pointer', outline: 'none'
           }}
         >
           <option value="score_asc">Sort: Score (low first)</option>
@@ -161,20 +159,16 @@ export default function Wellness() {
 
       {/* Patient wellness grid */}
       {loading ? (
-        <div style={{ textAlign: 'center', color: '#94a3b8', padding: '48px', backgroundColor: 'white', borderRadius: '10px' }}>
+        <div style={{ textAlign: 'center', color: 'var(--neutral-muted)', padding: '48px', backgroundColor: 'var(--card-bg)', borderRadius: 'var(--radius-lg)' }}>
           Loading wellness data...
         </div>
       ) : sorted.length === 0 ? (
-        <div style={{
-          backgroundColor: 'white', borderRadius: '10px',
-          padding: '48px', textAlign: 'center',
-          border: '1px dashed #e2e8f0'
-        }}>
-          <div style={{ fontSize: '32px', marginBottom: '12px' }}>🌟</div>
-          <div style={{ color: '#64748b', fontSize: '14px' }}>No patients match this filter.</div>
+        <div className="empty-state-card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+          <Icons.Heart size={24} style={{ color: 'var(--neutral-muted)' }} />
+          <div style={{ color: 'var(--neutral-muted)', fontSize: '14px' }}>No patients match this filter.</div>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
           {sorted.map(p => {
             const w = p.wellness
             const sc = scoreColor(p.score)
@@ -182,30 +176,23 @@ export default function Wellness() {
               <div
                 key={p.id}
                 onClick={() => navigate(`/patients/${p.id}`)}
+                className="card-premium card-premium-clickable"
                 style={{
-                  backgroundColor: 'white', borderRadius: '10px',
-                  padding: '18px 20px', cursor: 'pointer',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.07)',
+                  padding: '18px 20px',
                   border: p.score !== null && p.score <= 4
-                    ? '1px solid #fecaca'
-                    : '1px solid #f1f5f9',
-                  transition: 'box-shadow 0.15s'
+                    ? '1px solid var(--error-color)'
+                    : '1px solid var(--neutral-border)',
+                  marginBottom: 0
                 }}
-                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)'}
-                onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.07)'}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                   <div>
-                    <div style={{ fontWeight: '600', color: '#0f172a', fontSize: '15px' }}>{p.name}</div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px' }}>
+                    <div style={{ fontWeight: '700', color: 'var(--neutral-dark)', fontSize: '15px' }}>{p.name}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--neutral-muted)', marginTop: '2px' }}>
                       Age {p.age || '?'} · {p.language?.toUpperCase()}
                     </div>
                   </div>
-                  <span style={{
-                    backgroundColor: sc.bg, color: sc.color,
-                    fontSize: '11px', fontWeight: '600',
-                    padding: '3px 9px', borderRadius: '12px'
-                  }}>
+                  <span className={`badge-premium badge-${p.score !== null && p.score <= 4 ? 'danger' : p.score >= 8 ? 'success' : 'warning'}`}>
                     {sc.label}
                   </span>
                 </div>
@@ -218,19 +205,19 @@ export default function Wellness() {
                     gap: '6px', marginTop: '12px'
                   }}>
                     {[
-                      { label: 'Mood', value: `${moodEmoji[w.mood] || '❓'} ${w.mood || '—'}` },
-                      { label: 'Pain', value: `${painEmoji[w.pain] || '❓'} ${w.pain || '—'}` },
-                      { label: 'Eating', value: w.eating === 'yes' ? '✅ Yes' : w.eating === 'no' ? '❌ No' : w.eating === 'partial' ? '🟡 Partial' : '❓ —' },
+                      { label: 'Mood', value: moodLabel[w.mood] || '—' },
+                      { label: 'Pain', value: painLabel[w.pain] || '—' },
+                      { label: 'Eating', value: w.eating === 'yes' ? 'Yes' : w.eating === 'no' ? 'No' : w.eating === 'partial' ? 'Partial' : '—' },
                       { label: 'Sleep', value: w.sleep || '—' },
                     ].map(item => (
                       <div key={item.label} style={{
-                        backgroundColor: '#f8fafc', borderRadius: '6px',
+                        backgroundColor: 'var(--neutral-bg)', border: '1px solid var(--neutral-border)', borderRadius: '6px',
                         padding: '6px 8px'
                       }}>
-                        <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '1px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        <div style={{ fontSize: '10px', color: 'var(--neutral-muted)', marginBottom: '1px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                           {item.label}
                         </div>
-                        <div style={{ fontSize: '12px', color: '#374151', fontWeight: '500' }}>
+                        <div style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600' }}>
                           {item.value}
                         </div>
                       </div>
@@ -238,9 +225,9 @@ export default function Wellness() {
                   </div>
                 ) : (
                   <div style={{
-                    marginTop: '12px', fontSize: '12px', color: '#94a3b8',
+                    marginTop: '12px', fontSize: '12px', color: 'var(--neutral-muted)',
                     textAlign: 'center', padding: '8px',
-                    backgroundColor: '#f9fafb', borderRadius: '6px'
+                    backgroundColor: 'var(--neutral-bg)', borderRadius: '6px'
                   }}>
                     No check-in data yet
                   </div>
@@ -248,16 +235,17 @@ export default function Wellness() {
 
                 {w?.concerns && (
                   <div style={{
-                    marginTop: '10px', fontSize: '12px', color: '#92400e',
-                    backgroundColor: '#fffbeb', borderRadius: '6px',
-                    padding: '6px 10px', borderLeft: '3px solid #fbbf24'
+                    marginTop: '10px', fontSize: '12px', color: 'var(--warning-color)',
+                    backgroundColor: 'var(--warning-bg)', borderRadius: 'var(--radius-sm)',
+                    padding: '6px 10px', borderLeft: '3px solid var(--warning-color)',
+                    display: 'flex', alignItems: 'center', gap: '6px'
                   }}>
-                    ⚠️ {w.concerns}
+                    <Icons.AlertTriangle size={12} style={{ flexShrink: 0 }} /> {w.concerns}
                   </div>
                 )}
 
                 {w?.checked_at && (
-                  <div style={{ fontSize: '11px', color: '#9ca3af', marginTop: '8px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--neutral-muted)', marginTop: '8px' }}>
                     Checked in: {new Date(w.checked_at).toLocaleString()}
                   </div>
                 )}

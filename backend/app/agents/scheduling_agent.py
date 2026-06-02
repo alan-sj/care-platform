@@ -1,12 +1,7 @@
 """
 Scheduling Agent — ADK-native implementation.
-
-Analyses patient health signals from all other agents
-(medication adherence, wellness scores, emergency risk)
-and generates a prioritised daily visit plan for coordinators.
-
-ADK pattern introduced: Multi-tool reasoning over combined signals
-from multiple data sources to produce a structured output.
+Generates a prioritised daily visit plan for coordinators using native
+ADK output schemas.
 """
 
 from __future__ import annotations
@@ -14,12 +9,12 @@ from __future__ import annotations
 import json
 import uuid
 from typing import Any
+from pydantic import BaseModel, Field
 
 from google.adk import Agent
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from app.services.session_service import session_service
 
-_session_service = InMemorySessionService()
 APP_NAME = "scheduling_agent_app"
 
 
@@ -36,20 +31,7 @@ def evaluate_patient_visit_priority(
 ) -> dict[str, Any]:
     """
     Evaluate how urgently a patient needs a coordinator visit.
-
-    Args:
-        patient_name:                   Patient's full name.
-        days_since_last_visit:          Days since last coordinator visit (None if never).
-        visit_frequency:                Required frequency — 'daily', 'weekly', 'biweekly', 'monthly'.
-        consecutive_missed_medications: Number of consecutive missed medication reminders.
-        latest_wellness_score:          Most recent wellness score 1-10 (None if no data).
-        latest_risk_level:              Latest emergency risk level — none/low/medium/high/critical.
-        has_open_alerts:                Whether patient has open unresolved alerts.
-
-    Returns:
-        Structured priority data for the agent to reason over.
     """
-    # Calculate if visit is overdue based on frequency
     frequency_days = {
         "daily": 1,
         "weekly": 7,
@@ -83,17 +65,7 @@ def evaluate_coordinator_capacity(
 ) -> dict[str, Any]:
     """
     Evaluate a coordinator's current capacity for additional visits.
-
-    Args:
-        coordinator_name:               Coordinator's full name.
-        total_assigned_patients:        Total patients assigned to this coordinator.
-        visits_already_scheduled_today: Visits already planned for today.
-        is_active:                      Whether coordinator is currently active.
-
-    Returns:
-        Structured capacity data for the agent to reason over.
     """
-    # Simple capacity model — coordinators can handle ~5 visits per day
     max_daily_visits   = 5
     remaining_capacity = max(0, max_daily_visits - visits_already_scheduled_today)
 
@@ -113,17 +85,9 @@ def suggest_visit_time_slot(
 ) -> dict[str, Any]:
     """
     Suggest an appropriate time slot for a visit based on priority.
-
-    Args:
-        priority_level:      'urgent', 'high', 'medium', 'low'
-        existing_slots_taken: List of time slots already booked e.g. ['09:00', '11:00']
-
-    Returns:
-        Suggested time slot and rationale.
     """
     all_slots = ["09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"]
 
-    # Urgent visits get morning slots
     preferred = {
         "urgent": ["09:00", "10:00", "11:00"],
         "high":   ["10:00", "11:00", "13:00"],
@@ -142,54 +106,50 @@ def suggest_visit_time_slot(
     }
 
 
-# ── Agent ─────────────────────────────────────────────────────────────────────
+# ── Structured Output Schema ──────────────────────────────────────────────────
+
+class VisitItem(BaseModel):
+    patient_name: str
+    patient_id: str
+    coordinator_name: str
+    coordinator_id: str | None = Field(default=None)
+    time_slot: str
+    priority: str = Field(description="urgent, high, medium, or low")
+    reason: str
+    notes: str | None = Field(default=None)
+
+class UnassignedItem(BaseModel):
+    patient_name: str
+    patient_id: str
+    reason: str
+
+class WorkloadItem(BaseModel):
+    coordinator_name: str
+    visits_assigned: int
+    capacity_remaining: int
+
+class SchedulingAgentResponse(BaseModel):
+    schedule_date: str = Field(description="YYYY-MM-DD")
+    total_visits_planned: int
+    visits: list[VisitItem] = Field(default=[])
+    unassigned_patients: list[UnassignedItem] = Field(default=[])
+    coordinator_workload: list[WorkloadItem] = Field(default=[])
+    summary: str = Field(description="2-3 sentence plain English summary of today's plan")
+
+
+# ── Agent definition ──────────────────────────────────────────────────────────
 
 SCHEDULING_AGENT_INSTRUCTION = """
 You are an AI scheduling coordinator for a home care platform.
 
-Your job is to generate a smart, prioritised daily visit plan by analysing
-patient health signals and coordinator capacity together.
+Your job is to generate a smart, prioritised daily visit plan by analysing patient health signals and coordinator capacity together.
 
 Steps:
 1. For each patient, call evaluate_patient_visit_priority() with their data.
 2. For each coordinator, call evaluate_coordinator_capacity() with their data.
 3. Match patients to coordinators based on assignment and capacity.
 4. For each assigned visit, call suggest_visit_time_slot() to get a time.
-5. Reason over ALL data and produce the final schedule.
-6. Respond with ONLY a valid JSON object — no extra text, no markdown fences.
-
-JSON format (strictly follow this):
-{
-    "schedule_date": "<today's date YYYY-MM-DD>",
-    "total_visits_planned": <integer>,
-    "visits": [
-        {
-            "patient_name": "<name>",
-            "patient_id": "<uuid>",
-            "coordinator_name": "<name>",
-            "coordinator_id": "<uuid>",
-            "time_slot": "<HH:MM>",
-            "priority": "urgent" | "high" | "medium" | "low",
-            "reason": "<why this visit is needed today>",
-            "notes": "<anything coordinator should know before visiting>"
-        }
-    ],
-    "unassigned_patients": [
-        {
-            "patient_name": "<name>",
-            "patient_id": "<uuid>",
-            "reason": "<why they could not be assigned>"
-        }
-    ],
-    "coordinator_workload": [
-        {
-            "coordinator_name": "<name>",
-            "visits_assigned": <integer>,
-            "capacity_remaining": <integer>
-        }
-    ],
-    "summary": "<2-3 sentence plain English summary of today's plan>"
-}
+5. Reason over ALL data and produce the final schedule matching the required schema.
 
 Priority rules:
 - "urgent" → risk_level is high/critical OR wellness_score <= 3 OR 3+ consecutive missed meds
@@ -208,13 +168,14 @@ A coordinator at 6 visits is better than a critical patient going unvisited.
 
 scheduling_agent = Agent(
     name="scheduling_agent",
-    model="gemini-2.5-flash-lite",
+    model="gemini-flash-lite-latest",
     instruction=SCHEDULING_AGENT_INSTRUCTION,
     tools=[
         evaluate_patient_visit_priority,
         evaluate_coordinator_capacity,
         suggest_visit_time_slot,
     ],
+    output_schema=SchedulingAgentResponse,
 )
 
 
@@ -228,19 +189,9 @@ async def generate_daily_schedule(
 ) -> dict[str, Any]:
     """
     Generate optimised daily visit schedule.
-
-    Args:
-        patients_data:     List of patient dicts with health signals.
-        coordinators_data: List of coordinator dicts with capacity info.
-        schedule_date:     Date string YYYY-MM-DD for the schedule.
-        session_id:        Optional ADK session ID.
-
-    Returns:
-        Full schedule dict with visits, unassigned patients, workload summary.
     """
-    session_id = session_id or str(uuid.uuid4())
+    session_id = session_id or f"schedule_{schedule_date}"
 
-    # Build prompt with all data
     patients_text = "\n".join([
         f"Patient {i+1}: {p['name']} (ID: {p['id']})\n"
         f"  - Days since last visit: {p.get('days_since_last_visit', 'Never visited')}\n"
@@ -270,45 +221,77 @@ PATIENTS NEEDING ASSESSMENT:
 AVAILABLE COORDINATORS:
 {coordinators_text}
 
-Analyse all patient health signals and coordinator capacity,
-then generate the optimised daily visit schedule as JSON.
+Analyse all patient health signals and coordinator capacity, then generate the schedule matching the required schema.
 """
 
     runner = Runner(
         agent=scheduling_agent,
         app_name=APP_NAME,
-        session_service=_session_service,
+        session_service=session_service,
     )
 
-    session = await _session_service.create_session(
-        app_name=APP_NAME,
-        user_id="system",
-        session_id=session_id,
-    )
+    from google.adk.errors.already_exists_error import AlreadyExistsError
+    try:
+        session = await session_service.create_session(
+            app_name=APP_NAME,
+            user_id="system",
+            session_id=session_id,
+        )
+    except AlreadyExistsError:
+        session = await session_service.get_session(
+            app_name=APP_NAME,
+            user_id="system",
+            session_id=session_id,
+        )
 
     from google.genai import types
 
+    import asyncio
+    import logging
+
+    max_retries = 4
+    base_delay = 1.0
+
     final_text = ""
-    async for event in runner.run_async(
-        user_id="system",
-        session_id=session.id,
-        new_message=types.Content(
-            role="user",
-            parts=[types.Part(text=prompt)]
-        ),
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    final_text += part.text
+    for attempt in range(max_retries):
+        try:
+            final_text = ""
+            async for event in runner.run_async(
+                user_id="system",
+                session_id=session.id,
+                new_message=types.Content(
+                    role="user",
+                    parts=[types.Part(text=prompt)]
+                ),
+            ):
+                if event.is_final_response() and event.content and event.content.parts:
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            final_text += part.text
+            break
+        except Exception as e:
+            err_str = str(e)
+            is_temporary = (
+                "503" in err_str or 
+                "429" in err_str or 
+                "unavailable" in err_str.lower() or 
+                "rate" in err_str.lower() or
+                "overloaded" in err_str.lower() or
+                "demand" in err_str.lower()
+            )
+            if is_temporary and attempt < max_retries - 1:
+                delay = base_delay * (2.5 ** attempt)
+                logging.warning(
+                    f"Scheduling agent ADK Runner temporary error on attempt {attempt+1}/{max_retries}: {e}. "
+                    f"Retrying in {delay:.2f}s..."
+                )
+                await asyncio.sleep(delay)
+                continue
+            else:
+                logging.error(f"Error executing scheduling agent after {attempt+1} attempts: {e}")
+                raise e
 
     raw = final_text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-
     try:
         return json.loads(raw)
     except json.JSONDecodeError:

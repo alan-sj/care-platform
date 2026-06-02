@@ -1,57 +1,32 @@
 """
-Medication Agent — ADK-native rewrite.
-
-Replaces the old direct google-genai call with a proper ADK Agent + tool.
-The agent interprets a patient's free-text reply to a medication reminder
-and returns a structured JSON result.
+Medication Agent — ADK-native implementation.
+Interprets a patient's free-text reply to a medication reminder
+and returns a structured JSON result using native ADK schemas.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
+from pydantic import BaseModel, Field
 
 from google.adk import Agent
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-
-
-# ── Session service (in-memory; swap for DatabaseSessionService in prod) ─────
-_session_service = InMemorySessionService()
+from app.services.session_service import session_service
 
 APP_NAME = "medication_agent_app"
 
 
-# ── Tool: parse medication reply ──────────────────────────────────────────────
+# ── Structured Output Schema ──────────────────────────────────────────────────
 
-def parse_medication_reply(
-    patient_name: str,
-    medication_list: str,
-    patient_message: str,
-) -> dict[str, Any]:
-    """
-    Analyse a patient's free-text reply and return a structured interpretation.
+class MedicationStatusItem(BaseModel):
+    medication_name: str
+    status: str = Field(description="confirmed, missed, flagged, or unclear")
+    concern: str | None = Field(default=None, description="detail any symptoms or concerns if status is flagged")
 
-    Args:
-        patient_name: The patient's first name (used to personalise the reply).
-        medication_list: Numbered list of medications, e.g.
-            "1. Metformin 500mg\\n2. Lisinopril 10mg"
-        patient_message: The raw message the patient sent back.
-
-    Returns:
-        A dict with keys:
-          - medications: list of {medication_name, status, concern}
-          - reply: warm human-readable reply to send back to the patient
-    """
-    # This function is called *by* the ADK agent as a tool.
-    # The real logic lives in the agent's system instruction + Gemini reasoning.
-    # We return the raw input so the agent can reason over it and output JSON.
-    return {
-        "patient_name": patient_name,
-        "medication_list": medication_list,
-        "patient_message": patient_message,
-    }
+class MedicationAgentResponse(BaseModel):
+    medications: list[MedicationStatusItem]
+    reply: str = Field(description="warm, supportive, language-matched reply to send to the patient")
 
 
 # ── Agent definition ──────────────────────────────────────────────────────────
@@ -60,21 +35,8 @@ MEDICATION_AGENT_INSTRUCTION = """
 You are a compassionate AI care assistant for a home care platform.
 
 A patient has replied to a medication reminder. Your job is to:
-1. Call the `parse_medication_reply` tool with the provided inputs.
-2. Use the tool's output to reason about each medication's status.
-3. Respond with ONLY a valid JSON object — no extra text, no markdown fences.
-
-JSON format (strictly follow this):
-{
-    "medications": [
-        {
-            "medication_name": "<name>",
-            "status": "confirmed" | "missed" | "flagged" | "unclear",
-            "concern": null | "<description>"
-        }
-    ],
-    "reply": "<warm single reply covering all medications>"
-}
+1. Interpret the patient's reply and determine the status of each medication listed.
+2. Formulate a warm, supportive response in the patient's language.
 
 Status rules:
 - "confirmed"  → patient clearly took that medication
@@ -95,9 +57,9 @@ Support messages in English, Arabic, and Malayalam — match the patient's langu
 
 medication_agent = Agent(
     name="medication_agent",
-    model="gemini-2.5-flash-lite",
+    model="gemini-flash-lite-latest",
     instruction=MEDICATION_AGENT_INSTRUCTION,
-    tools=[parse_medication_reply],
+    output_schema=MedicationAgentResponse,
 )
 
 
@@ -107,23 +69,15 @@ async def interpret_patient_reply(
     patient_name: str,
     medications: list[dict],          # [{"index": 1, "name": "Metformin", "dosage": "500mg"}, ...]
     message: str,
+    patient_id: Any = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    High-level helper that wraps the ADK runner call.
-
-    Args:
-        patient_name: Patient's name.
-        medications:  List of medication dicts with index/name/dosage keys.
-        message:      Raw patient reply text.
-        session_id:   Optional session ID for continuity (defaults to a new UUID).
-
-    Returns:
-        Parsed dict with 'medications' list and 'reply' string.
+    Interpret patient reply using direct Gemini client call with response schema.
     """
     import uuid
 
-    session_id = session_id or str(uuid.uuid4())
+    session_id = session_id or (f"medication_{patient_id}" if patient_id else str(uuid.uuid4()))
 
     med_list = "\n".join(
         f"{m['index']}. {m['name']} {m.get('dosage', '')}".strip()
@@ -134,45 +88,32 @@ async def interpret_patient_reply(
         f"Patient name: {patient_name}\n"
         f"Medications reminded about:\n{med_list}\n\n"
         f"Patient message: \"{message}\"\n\n"
-        "Interpret this reply and respond with JSON only."
+        "Interpret this reply and respond matching the required schema."
     )
 
-    runner = Runner(
-        agent=medication_agent,
-        app_name=APP_NAME,
-        session_service=_session_service,
-    )
+    # Standardize session creation to keep ADK session storage updated/initialized
+    try:
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id="system",
+            session_id=session_id,
+        )
+    except Exception:
+        pass
 
-    session = await _session_service.create_session(
-        app_name=APP_NAME,
-        user_id="system",
-        session_id=session_id,
-    )
-
-    from google.genai import types
-
-    final_text = ""
-    async for event in runner.run_async(
-        user_id="system",
-        session_id=session.id,
-        new_message=types.Content(role="user", parts=[types.Part(text=prompt)]),
-    ):
-        if event.is_final_response() and event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    final_text += part.text
-
-    # Strip accidental markdown fences
-    raw = final_text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
+    from app.services.gemini_service import generate_content_with_retry
 
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
+        result = await generate_content_with_retry(
+            prompt=prompt,
+            system_instruction=MEDICATION_AGENT_INSTRUCTION,
+            response_schema=MedicationAgentResponse,
+            model="gemini-flash-lite-latest",
+        )
+        return result
+    except Exception as e:
+        import logging
+        logging.error(f"Error calling medication agent directly: {e}")
         # Graceful fallback
         return {
             "medications": [

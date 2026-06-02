@@ -167,6 +167,7 @@ async def process_visit_note(
     patient_name: str,
     raw_note: str,
     patient_context: dict,
+    patient_id: Any = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """
@@ -183,7 +184,7 @@ async def process_visit_note(
     Returns:
         Structured visit note dict.
     """
-    session_id = session_id or str(uuid.uuid4())
+    session_id = session_id or (f"copilot_{patient_id}" if patient_id else str(uuid.uuid4()))
 
     prompt = f"""
 Coordinator: {coordinator_name}

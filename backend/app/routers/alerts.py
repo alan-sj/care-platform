@@ -41,3 +41,13 @@ def resolve_alert(alert_id: uuid.UUID, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(alert)
     return alert
+
+
+@router.get("/patient/{patient_id}", response_model=List[AlertResponse])
+def get_patient_alerts(patient_id: uuid.UUID, db: Session = Depends(get_db)):
+    return (
+        db.query(Alert)
+        .filter(Alert.patient_id == patient_id)
+        .order_by(Alert.created_at.desc())
+        .all()
+    )

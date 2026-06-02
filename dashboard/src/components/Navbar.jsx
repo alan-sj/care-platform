@@ -1,16 +1,18 @@
 import { Link, useLocation } from 'react-router-dom'
+import * as Icons from './Icons'
 
 export default function Navbar() {
   const location = useLocation()
 
-  const links = [
-    { path: '/',          label: 'Dashboard' },
-    { path: '/schedule',  label: 'Schedule'  },
-    { path: '/patients',  label: 'Patients'  },
-    { path: '/wellness',  label: 'Wellness'  },
-    { path: '/notes',     label: 'Notes'     },
-    { path: '/alerts',    label: 'Alerts'    },
+  const generalLinks = [
+    { path: '/',          label: 'Dashboard', icon: <Icons.LayoutDashboard size={18} /> },
+    { path: '/schedule',  label: 'Schedule',  icon: <Icons.Calendar size={18} /> },
+    { path: '/patients',  label: 'Patients',  icon: <Icons.Users size={18} /> },
+    { path: '/wellness',  label: 'Wellness',  icon: <Icons.Heart size={18} /> },
+    { path: '/notes',     label: 'Notes',     icon: <Icons.FileText size={18} /> },
+    { path: '/alerts',    label: 'Alerts',    icon: <Icons.Bell size={18} /> },
   ]
+
 
   const isActive = (path) =>
     path === '/'
@@ -18,37 +20,26 @@ export default function Navbar() {
       : location.pathname.startsWith(path)
 
   return (
-    <nav style={{
-      backgroundColor: '#1e3a5f',
-      padding: '0 24px',
-      display: 'flex',
-      alignItems: 'center',
-      height: '60px',
-      gap: '8px',
-      overflowX: 'auto'
-    }}>
-      <span style={{ color: 'white', fontWeight: 'bold', fontSize: '16px', marginRight: '16px', whiteSpace: 'nowrap' }}>
-        🏥 Care Platform
-      </span>
-      {links.map(link => (
-        <Link
-          key={link.path}
-          to={link.path}
-          style={{
-            color: isActive(link.path) ? 'white' : '#94a3b8',
-            textDecoration: 'none',
-            fontWeight: isActive(link.path) ? '600' : '400',
-            fontSize: '14px',
-            padding: '6px 12px',
-            borderRadius: '6px',
-            backgroundColor: isActive(link.path) ? 'rgba(255,255,255,0.12)' : 'transparent',
-            whiteSpace: 'nowrap',
-            transition: 'background-color 0.15s'
-          }}
-        >
-          {link.label}
-        </Link>
-      ))}
+    <nav className="sidebar">
+      <div className="sidebar-logo" style={{ color: 'var(--neutral-dark)' }}>
+        <Icons.FirstAidCross size={20} style={{ strokeWidth: 2.5 }} /> Care Platform
+      </div>
+
+      <div className="sidebar-section">
+        <div className="sidebar-section-title">General</div>
+        <div className="sidebar-links">
+          {generalLinks.map(link => (
+            <Link
+              key={link.path}
+              to={link.path}
+              className={`sidebar-link ${isActive(link.path) ? 'sidebar-link-active' : ''}`}
+            >
+              <span style={{ display: 'flex', alignItems: 'center' }}>{link.icon}</span>
+              {link.label}
+            </Link>
+          ))}
+        </div>
+      </div>
     </nav>
   )
 }
