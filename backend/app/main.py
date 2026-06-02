@@ -71,24 +71,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(patients.router)
-app.include_router(medications.router)
-app.include_router(alerts.router)
-app.include_router(webhooks.router)
-app.include_router(users.router)
-app.include_router(summaries.router)
-app.include_router(reminders.router)
-app.include_router(family.router)
-app.include_router(wellness.router)
-app.include_router(emergency.router)
-app.include_router(scheduling.router)
-app.include_router(copilot.router)
+app.include_router(patients.router, prefix="/api")
+app.include_router(medications.router, prefix="/api")
+app.include_router(alerts.router, prefix="/api")
+app.include_router(webhooks.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
+app.include_router(summaries.router, prefix="/api")
+app.include_router(reminders.router, prefix="/api")
+app.include_router(family.router, prefix="/api")
+app.include_router(wellness.router, prefix="/api")
+app.include_router(emergency.router, prefix="/api")
+app.include_router(scheduling.router, prefix="/api")
+app.include_router(copilot.router, prefix="/api")
 
-
-@app.get("/")
-def root():
-    return {"status": "Care Platform API is running", "adk": True}
 
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+
+
+# Mount static files for React frontend if built
+if os.path.exists("dist"):
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+
+    # Serve assets folder
+    app.mount("/assets", StaticFiles(directory="dist/assets"), name="assets")
+
+    # Serve index.html for root "/"
+    @app.get("/")
+    def index():
+        return FileResponse("dist/index.html")
+
+    # Catch-all router for any other unmatched routes (SPA client-side routing)
+    @app.get("/{catchall:path}")
+    def catchall_route(catchall: str):
+        # If it's an API route that didn't match, or health, or assets, let it 404 naturally
+        if catchall.startswith("api/") or catchall.startswith("assets/") or catchall == "health":
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not Found")
+        # Otherwise, return index.html to let React Router handle it
+        return FileResponse("dist/index.html")
+else:
+    @app.get("/")
+    def root():
+        return {"status": "Care Platform API is running", "adk": True}

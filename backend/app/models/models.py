@@ -1,11 +1,43 @@
-from sqlalchemy import Column, String, Integer, BigInteger, Boolean, ARRAY, ForeignKey, DateTime, Text, Float, JSON
+from sqlalchemy import Column, String, Integer, BigInteger, Boolean, ForeignKey, DateTime, Text, Float, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy.types import TypeDecorator
 from app.database import Base
 import uuid
 import enum
+import json
 from datetime import datetime
+
+class StringArray(TypeDecorator):
+    """
+    A custom type that uses PostgreSQL's ARRAY(String) if available,
+    and falls back to JSON (as a list of strings) on other databases (like SQLite).
+    """
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import ARRAY
+            return dialect.type_descriptor(ARRAY(String))
+        else:
+            return dialect.type_descriptor(JSON)
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return [value]
+        return value
 
 
 # ── Enums ────────────────────────────────────────────────────────────────────
@@ -92,7 +124,7 @@ class Medication(Base):
     name = Column(String, nullable=False)
     dosage = Column(String)
     frequency = Column(String)
-    times = Column(ARRAY(String))
+    times = Column(StringArray)
     active = Column(Boolean, default=True)
 
     patient = relationship("Patient", back_populates="medications")
