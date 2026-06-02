@@ -124,7 +124,7 @@ function WellnessCard({ wellness }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         <span style={{ fontSize: '22px', fontWeight: '800', color: sc.color }}>{sc.label}</span>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+      <div className="grid-1-1" style={{ gap: '8px' }}>
         {[
           ['Mood', wellness.mood],
           ['Pain', wellness.pain],
@@ -722,7 +722,7 @@ export default function PatientDetail() {
 
       {/* 🚀 Tab 1: Health & Vitals Workspace */}
       {activeTab === 'health' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px', alignItems: 'flex-start' }}>
+        <div className="grid-2-1">
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             {/* Wellness Assessment Grid Card */}
@@ -849,7 +849,7 @@ export default function PatientDetail() {
 
       {/* 🚀 Tab 2: Visit Logs & Notes Workspace */}
       {activeTab === 'visits' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr', gap: '24px', alignItems: 'flex-start' }}>
+        <div className="grid-2-12">
           {/* Timeline Feed of Visit Notes */}
           <div className="card-premium" style={{ marginBottom: 0 }}>
             <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 16px 0' }}>
@@ -910,7 +910,7 @@ export default function PatientDetail() {
 
       {/* 🚀 Tab 3: Profile & Management Workspace */}
       {activeTab === 'profile' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px', alignItems: 'flex-start' }}>
+        <div className="grid-2-1">
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             
@@ -919,7 +919,7 @@ export default function PatientDetail() {
               <h2 style={{ fontSize: '16px', fontWeight: '800', color: 'var(--neutral-dark)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 14px 0' }}>
                 <Icons.Activity size={16} /> Clinical Baseline Context
               </h2>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)', padding: '16px', border: '1px solid var(--neutral-border)' }}>
+              <div className="grid-1-1" style={{ backgroundColor: 'var(--neutral-bg)', borderRadius: 'var(--radius-md)', padding: '16px', border: '1px solid var(--neutral-border)' }}>
                 <div>
                   <div style={{ fontSize: '10px', color: 'var(--neutral-muted)', textTransform: 'uppercase', fontWeight: '700', marginBottom: '2px' }}>Baseline BP</div>
                   <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--neutral-dark)' }}>{patient.baseline_bp || 'Not set'}</div>

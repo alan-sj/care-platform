@@ -63,7 +63,7 @@ export default function Patients() {
           <p className="card-text-secondary" style={{ marginBottom: '16px' }}>
             A unique onboarding link will be generated automatically. Share it with the patient to connect their Telegram.
           </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div className="grid-1-1" style={{ gap: '12px' }}>
             {[
               { key: 'name', label: 'Full Name', type: 'text', required: true },
               { key: 'phone', label: 'Phone', type: 'text', required: true },
