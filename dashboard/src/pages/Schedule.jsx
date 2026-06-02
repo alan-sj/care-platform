@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
-import { getTodaySchedule, generateSchedule, updateVisitStatus, getCoordinatorWorkload } from '../api/scheduling'
+import { getTodaySchedule, generateSchedule, updateVisitStatus, getCoordinatorWorkload, createIndividualVisit } from '../api/scheduling'
+import { getPatients } from '../api/patients'
+import { getUsers } from '../api/users'
 import * as Icons from '../components/Icons'
 
 const priorityConfig = {
@@ -14,7 +16,22 @@ const statusConfig = {
   confirmed: { color: '#059669', bg: '#ecfdf5', label: 'Confirmed' },
   completed: { color: '#16a34a', bg: '#f0fdf4', label: 'Completed' },
   cancelled: { color: '#6b7280', bg: '#f9fafb', label: 'Cancelled' },
+  cancelled_by_coordinator: { color: '#6b7280', bg: '#f9fafb', label: 'Cancelled by Coordinator' },
+  cancelled_by_patient: { color: '#dc2626', bg: '#fef2f2', label: 'Declined by Patient' },
 }
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const todayStr = new Date().toISOString().split('T')[0];
+  if (dateStr === todayStr) return 'Today';
+  
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+};
 
 function VisitCard({ visit, onStatusUpdate }) {
   const [updating, setUpdating] = useState(false)
@@ -42,7 +59,7 @@ function VisitCard({ visit, onStatusUpdate }) {
     if (!confirm('Cancel this visit?')) return
     setUpdating(true)
     try {
-      await updateVisitStatus(visit.id, 'cancelled')
+      await updateVisitStatus(visit.id, 'cancelled_by_coordinator')
       onStatusUpdate()
     } finally {
       setUpdating(false)
@@ -55,10 +72,10 @@ function VisitCard({ visit, onStatusUpdate }) {
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' }}>
             <span style={{
-              fontFamily: 'monospace', fontSize: '15px', fontWeight: '700',
+              fontFamily: 'monospace', fontSize: '14px', fontWeight: '700',
               color: 'var(--neutral-dark)', letterSpacing: '0.5px'
             }}>
-              {visit.time_slot || '—:——'}
+              {formatDate(visit.schedule_date)} {visit.time_slot ? `at ${visit.time_slot}` : ''}
             </span>
             <span className="badge-premium" style={{ backgroundColor: pc.bg, color: pc.color, border: `1px solid ${pc.border}` }}>
               {pc.label}
@@ -154,13 +171,79 @@ export default function Schedule() {
   const [generating, setGenerating] = useState(false)
   const [filterStatus, setFilterStatus] = useState('all')
 
+  const [patientList, setPatientList] = useState([])
+  const [coordinatorList, setCoordinatorList] = useState([])
+  const [showIndividualModal, setShowIndividualModal] = useState(false)
+  const [individualForm, setIndividualForm] = useState({
+    patient_id: '',
+    coordinator_id: '',
+    schedule_date: new Date().toLocaleDateString('sv-SE'),
+    time_slot: '10:00',
+    priority: 'medium',
+    reason: '',
+    notes: ''
+  })
+
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
   })
 
   useEffect(() => {
     fetchSchedule()
+    fetchDropdownData()
   }, [])
+
+  const fetchDropdownData = async () => {
+    try {
+      const [patRes, usrRes] = await Promise.all([
+        getPatients(),
+        getUsers()
+      ])
+      setPatientList(patRes.data)
+      const coords = usrRes.data.filter(u => u.role === 'coordinator')
+      setCoordinatorList(coords)
+      
+      if (patRes.data.length > 0) {
+        setIndividualForm(prev => ({
+          ...prev,
+          patient_id: patRes.data[0].id,
+          coordinator_id: coords[0]?.id || ''
+        }))
+      }
+    } catch (err) {
+      console.error('Error fetching dropdown option data:', err)
+    }
+  }
+
+  const handleIndividualSubmit = async (e) => {
+    e.preventDefault()
+    if (!individualForm.patient_id) {
+      alert('Please select a patient.')
+      return
+    }
+    try {
+      await createIndividualVisit({
+        patient_id: individualForm.patient_id,
+        coordinator_id: individualForm.coordinator_id || null,
+        schedule_date: individualForm.schedule_date || null,
+        time_slot: individualForm.time_slot || null,
+        priority: individualForm.priority,
+        reason: individualForm.reason || null,
+        notes: individualForm.notes || null
+      })
+      setShowIndividualModal(false)
+      setIndividualForm(prev => ({
+        ...prev,
+        reason: '',
+        notes: ''
+      }))
+      alert('Visit scheduled individually and patient notified on Telegram!')
+      await fetchSchedule()
+    } catch (err) {
+      console.error(err)
+      alert('Error scheduling individual visit.')
+    }
+  }
 
   const fetchSchedule = async () => {
     setLoading(true)
@@ -197,7 +280,9 @@ export default function Schedule() {
     ? visits
     : filterStatus === 'planned'
       ? visits.filter(v => ['planned', 'confirmed'].includes(v.status))
-      : visits.filter(v => v.status === filterStatus)
+      : filterStatus === 'cancelled'
+        ? visits.filter(v => v.status && v.status.startsWith('cancelled'))
+        : visits.filter(v => v.status === filterStatus)
 
   const planned   = visits.filter(v => ['planned', 'confirmed'].includes(v.status)).length
   const completed = visits.filter(v => v.status === 'completed').length
@@ -230,19 +315,31 @@ export default function Schedule() {
           </h1>
           <p style={{ fontSize: '13px', color: 'var(--neutral-muted)', margin: 0 }}>{today}</p>
         </div>
-        <button
-          onClick={handleGenerate}
-          disabled={generating}
-          className="btn-premium btn-success"
-          style={{
-            backgroundColor: generating ? 'var(--neutral-border)' : 'var(--primary-color)',
-            color: '#ffffff',
-            padding: '10px 20px',
-            fontSize: '14px'
-          }}
-        >
-          {generating ? 'Generating...' : 'Generate Schedule'}
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            onClick={() => setShowIndividualModal(true)}
+            className="btn-premium btn-primary-outline"
+            style={{
+              padding: '10px 20px',
+              fontSize: '14px'
+            }}
+          >
+            + Schedule Individual Visit
+          </button>
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="btn-premium btn-success"
+            style={{
+              backgroundColor: generating ? 'var(--neutral-border)' : 'var(--primary-color)',
+              color: '#ffffff',
+              padding: '10px 20px',
+              fontSize: '14px'
+            }}
+          >
+            {generating ? 'Generating...' : 'Generate Schedule'}
+          </button>
+        </div>
       </div>
 
       {/* Stats row */}
@@ -354,8 +451,179 @@ export default function Schedule() {
               </div>
             </div>
           )}
-        </div>
       </div>
+    </div>
+
+      {showIndividualModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)', backdropFilter: 'blur(4px)',
+          display: 'flex', justifyContent: 'center', alignItems: 'center',
+          zIndex: 1000, padding: '16px'
+        }}>
+          <div className="card-premium" style={{
+            width: '100%', maxWidth: '480px', margin: 0, padding: '24px',
+            backgroundColor: 'var(--card-bg)', border: '1px solid var(--neutral-border)',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+          }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'var(--neutral-dark)', marginBottom: '16px', marginTop: 0 }}>
+              Schedule Individual Visit
+            </h3>
+            
+            <form onSubmit={handleIndividualSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                  Patient *
+                </label>
+                <select
+                  value={individualForm.patient_id}
+                  onChange={e => setIndividualForm({ ...individualForm, patient_id: e.target.value })}
+                  required
+                  style={{
+                    width: '100%', padding: '8px 12px', fontSize: '14px',
+                    border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--card-bg)', color: 'var(--neutral-dark)', outline: 'none'
+                  }}
+                >
+                  <option value="" disabled>Select Patient</option>
+                  {patientList.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                  Care Coordinator
+                </label>
+                <select
+                  value={individualForm.coordinator_id}
+                  onChange={e => setIndividualForm({ ...individualForm, coordinator_id: e.target.value })}
+                  style={{
+                    width: '100%', padding: '8px 12px', fontSize: '14px',
+                    border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--card-bg)', color: 'var(--neutral-dark)', outline: 'none'
+                  }}
+                >
+                  <option value="">Unassigned</option>
+                  {coordinatorList.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                    Date *
+                  </label>
+                  <input
+                    type="date"
+                    min={new Date().toLocaleDateString('sv-SE')}
+                    value={individualForm.schedule_date}
+                    onChange={e => setIndividualForm({ ...individualForm, schedule_date: e.target.value })}
+                    required
+                    style={{
+                      width: '100%', padding: '8px 12px', fontSize: '14px',
+                      border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--card-bg)', color: 'var(--neutral-dark)', outline: 'none'
+                    }}
+                  />
+                </div>
+                
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                    Time Slot
+                  </label>
+                  <input
+                    type="time"
+                    value={individualForm.time_slot}
+                    onChange={e => setIndividualForm({ ...individualForm, time_slot: e.target.value })}
+                    required
+                    style={{
+                      width: '100%', padding: '8px 12px', fontSize: '14px',
+                      border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--card-bg)', color: 'var(--neutral-dark)', outline: 'none'
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                  Priority
+                </label>
+                <select
+                  value={individualForm.priority}
+                  onChange={e => setIndividualForm({ ...individualForm, priority: e.target.value })}
+                  style={{
+                    width: '100%', padding: '8px 12px', fontSize: '14px',
+                    border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--card-bg)', color: 'var(--neutral-dark)', outline: 'none'
+                  }}
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                  Reason for Visit
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Routine vitals check"
+                  value={individualForm.reason}
+                  onChange={e => setIndividualForm({ ...individualForm, reason: e.target.value })}
+                  style={{
+                    width: '100%', padding: '8px 12px', fontSize: '14px',
+                    border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--card-bg)', color: 'var(--neutral-dark)', outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '12px', color: 'var(--neutral-text)', fontWeight: '600', display: 'block', marginBottom: '4px' }}>
+                  Notes
+                </label>
+                <textarea
+                  placeholder="Additional instructions..."
+                  value={individualForm.notes}
+                  onChange={e => setIndividualForm({ ...individualForm, notes: e.target.value })}
+                  style={{
+                    width: '100%', padding: '8px 12px', fontSize: '14px',
+                    border: '1px solid var(--neutral-border)', borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--card-bg)', color: 'var(--neutral-dark)',
+                    minHeight: '60px', resize: 'vertical', outline: 'none', fontFamily: 'inherit'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowIndividualModal(false)}
+                  className="btn-premium btn-primary-outline"
+                  style={{ padding: '8px 16px', fontSize: '14px' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-premium btn-success"
+                  style={{ padding: '8px 16px', fontSize: '14px', backgroundColor: 'var(--primary-color)', color: '#fff' }}
+                >
+                  Schedule Visit
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -209,6 +209,21 @@ function VisitNoteForm({ patientId, onSubmitted }) {
               fontFamily: 'inherit', lineHeight: '1.5', outline: 'none'
             }}
           />
+          <div style={{
+            fontSize: '11px',
+            color: 'var(--neutral-muted)',
+            marginTop: '8px',
+            fontStyle: 'italic',
+            lineHeight: '1.4',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '6px'
+          }}>
+            <span style={{ color: 'var(--primary-color)' }}>💡</span>
+            <span>
+              <strong>Tip:</strong> Mention the visit date in your note (e.g., <em>"visited yesterday"</em> or <em>"on June 2nd"</em>) and the AI will automatically update and complete that day's scheduled visit card.
+            </span>
+          </div>
           <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
             <button
               onClick={handleSubmit}

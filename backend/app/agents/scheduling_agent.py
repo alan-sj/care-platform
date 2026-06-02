@@ -82,11 +82,41 @@ def evaluate_coordinator_capacity(
 def suggest_visit_time_slot(
     priority_level: str,
     existing_slots_taken: list[str],
+    schedule_date: str,
 ) -> dict[str, Any]:
     """
     Suggest an appropriate time slot for a visit based on priority.
+
+    Args:
+        priority_level: The priority level of the visit.
+        existing_slots_taken: List of time slots already taken.
+        schedule_date: The date for which the schedule is being generated (YYYY-MM-DD).
     """
+    import datetime
+    import pytz
+
+    is_today = False
+    try:
+        target_date = datetime.datetime.strptime(schedule_date, "%Y-%m-%d").date()
+        tz = pytz.timezone("Asia/Kolkata")
+        local_today = datetime.datetime.now(tz).date()
+        is_today = (target_date == local_today)
+    except Exception:
+        pass
+
     all_slots = ["09:00", "10:00", "11:00", "13:00", "14:00", "15:00", "16:00"]
+    slots_taken_copy = list(existing_slots_taken)
+
+    if is_today:
+        try:
+            tz = pytz.timezone("Asia/Kolkata")
+            local_now = datetime.datetime.now(tz)
+            current_time_str = local_now.strftime("%H:%M")
+            for slot in all_slots:
+                if slot < current_time_str and slot not in slots_taken_copy:
+                    slots_taken_copy.append(slot)
+        except Exception:
+            pass
 
     preferred = {
         "urgent": ["09:00", "10:00", "11:00"],
@@ -95,9 +125,9 @@ def suggest_visit_time_slot(
         "low":    ["14:00", "15:00", "16:00"],
     }.get(priority_level, all_slots)
 
-    available = [s for s in preferred if s not in existing_slots_taken]
+    available = [s for s in preferred if s not in slots_taken_copy]
     if not available:
-        available = [s for s in all_slots if s not in existing_slots_taken]
+        available = [s for s in all_slots if s not in slots_taken_copy]
 
     return {
         "suggested_slot":  available[0] if available else "To be arranged",

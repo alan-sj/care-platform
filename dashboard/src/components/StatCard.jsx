@@ -3,7 +3,7 @@ export default function StatCard({ title, value, color = '#6366f1', icon }) {
   const isPriority = title.toLowerCase().includes('priority');
   
   let badgeClass = 'badge-success';
-  let badgeLabel = 'Active';
+  let badgeLabel = null;
   
   if (isAlert) {
     if (value > 0) {
@@ -22,10 +22,11 @@ export default function StatCard({ title, value, color = '#6366f1', icon }) {
       badgeLabel = 'All Clear';
     }
   } else if (title.toLowerCase().includes('total')) {
-    badgeClass = 'badge-success';
-    badgeLabel = '+12.4% ↗';
+    badgeLabel = null;
   } else if (title.toLowerCase().includes('active')) {
     badgeClass = 'badge-success';
+    badgeLabel = 'Active';
+  } else {
     badgeLabel = 'Active';
   }
 
@@ -59,21 +60,23 @@ export default function StatCard({ title, value, color = '#6366f1', icon }) {
         <span style={{ fontSize: '28px', fontWeight: '800', color: 'var(--neutral-dark)' }}>
           {value}
         </span>
-        <span 
-          className={`badge-premium ${badgeClass}`}
-          style={{ 
-            fontSize: '11px', 
-            fontWeight: '700', 
-            padding: '2px 8px',
-            borderRadius: '4px',
-            textTransform: 'none',
-            letterSpacing: 'normal',
-            marginLeft: '8px',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          {badgeLabel}
-        </span>
+        {badgeLabel && (
+          <span 
+            className={`badge-premium ${badgeClass}`}
+            style={{ 
+              fontSize: '11px', 
+              fontWeight: '700', 
+              padding: '2px 8px',
+              borderRadius: '4px',
+              textTransform: 'none',
+              letterSpacing: 'normal',
+              marginLeft: '8px',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {badgeLabel}
+          </span>
+        )}
       </div>
     </div>
   )

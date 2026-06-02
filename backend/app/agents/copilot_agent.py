@@ -111,6 +111,7 @@ A coordinator has just visited a patient and sent you their visit notes
 
 JSON format (strictly follow this):
 {
+    "visit_date": "<YYYY-MM-DD format, or null if not mentioned or unclear>",
     "visit_time": "<HH:MM or null if not mentioned>",
     "visit_summary": "<2-3 sentence clean professional summary of the visit>",
     "vitals": {
@@ -150,7 +151,7 @@ Consider the patient's history and baseline when assessing risks.
 
 copilot_agent = Agent(
     name="copilot_agent",
-    model="gemini-2.5-flash-lite",
+    model="gemini-flash-latest",
     instruction=COPILOT_AGENT_INSTRUCTION,
     tools=[
         extract_vitals,
@@ -209,11 +210,19 @@ Process this visit note and respond with structured JSON only.
         session_service=_session_service,
     )
 
-    session = await _session_service.create_session(
-        app_name=APP_NAME,
-        user_id="system",
-        session_id=session_id,
-    )
+    from google.adk.errors.already_exists_error import AlreadyExistsError
+    try:
+        session = await _session_service.create_session(
+            app_name=APP_NAME,
+            user_id="system",
+            session_id=session_id,
+        )
+    except AlreadyExistsError:
+        session = await _session_service.get_session(
+            app_name=APP_NAME,
+            user_id="system",
+            session_id=session_id,
+        )
 
     from google.genai import types
 
@@ -242,6 +251,7 @@ Process this visit note and respond with structured JSON only.
         return json.loads(raw)
     except json.JSONDecodeError:
         return {
+            "visit_date":             None,
             "visit_time":             None,
             "visit_summary":          raw_note[:200],
             "vitals":                 {},

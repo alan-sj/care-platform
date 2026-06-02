@@ -8,7 +8,7 @@ Endpoints:
   PATCH /scheduling/visit/{id}  — update visit status
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import Column, String, DateTime, Text, ForeignKey, Date
 from sqlalchemy.dialects.postgresql import UUID
@@ -67,6 +67,16 @@ class VisitScheduleResponse(BaseModel):
 class VisitStatusUpdate(BaseModel):
     status: str  # completed / cancelled
     notes:  Optional[str] = None
+
+
+class VisitCreate(BaseModel):
+    patient_id:     uuid.UUID
+    coordinator_id: Optional[uuid.UUID] = None
+    schedule_date:  Optional[date] = None
+    time_slot:      Optional[str] = None
+    priority:       Optional[str] = "medium"
+    reason:         Optional[str] = None
+    notes:          Optional[str] = None
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -310,11 +320,11 @@ async def generate_schedule(db: Session = Depends(get_db)):
 
 @router.get("/today")
 def get_todays_schedule(db: Session = Depends(get_db)):
-    """Get today's visit schedule with patient and coordinator names."""
+    """Get visit schedule from today onwards with patient and coordinator names."""
     today   = date.today()
     visits  = db.query(VisitSchedule).filter(
-        VisitSchedule.schedule_date == today
-    ).order_by(VisitSchedule.time_slot).all()
+        VisitSchedule.schedule_date >= today
+    ).order_by(VisitSchedule.schedule_date, VisitSchedule.time_slot).all()
 
     result = []
     for v in visits:
@@ -325,6 +335,7 @@ def get_todays_schedule(db: Session = Depends(get_db)):
             "patient":          patient.name if patient else "Unknown",
             "coordinator":      coordinator.name if coordinator else "Unassigned",
             "time_slot":        v.time_slot,
+            "schedule_date":    str(v.schedule_date),
             "priority":         v.priority,
             "reason":           v.reason,
             "notes":            v.notes,
@@ -377,3 +388,86 @@ def update_visit_status(
     db.commit()
 
     return {"status": "updated", "visit_id": str(visit_id), "new_status": update.status}
+
+
+@router.post("/visit", response_model=VisitScheduleResponse)
+async def schedule_individual_visit(visit_in: VisitCreate, db: Session = Depends(get_db)):
+    """
+    Schedule a visit individually for a patient, and notify them on Telegram.
+    """
+    target_date = visit_in.schedule_date or date.today()
+    if target_date < date.today():
+        raise HTTPException(status_code=400, detail="Cannot schedule visits in the past.")
+    
+    db_visit = VisitSchedule(
+        patient_id     = visit_in.patient_id,
+        coordinator_id = visit_in.coordinator_id,
+        schedule_date  = target_date,
+        time_slot      = visit_in.time_slot,
+        priority       = visit_in.priority or "medium",
+        reason         = visit_in.reason,
+        notes          = visit_in.notes,
+        status         = "planned",
+    )
+    db.add(db_visit)
+    db.commit()
+    db.refresh(db_visit)
+
+    # Fetch patient details for notification
+    patient = db.query(Patient).filter(Patient.id == db_visit.patient_id).first()
+    if patient and patient.telegram_chat_id:
+        cname = "your coordinator"
+        if db_visit.coordinator_id:
+            coord = db.query(User).filter(User.id == db_visit.coordinator_id).first()
+            if coord:
+                cname = coord.name
+        
+        time_slot = db_visit.time_slot or "today"
+        lang = patient.language.value if patient.language else "en"
+
+        patient_messages = {
+            "en": (
+                f"🔔 <b>Care Visit Scheduled</b>\n\n"
+                f"Hi {patient.name}, your care coordinator <b>{cname}</b> is scheduled to visit you on <b>{target_date}</b> at <b>{time_slot}</b>.\n\n"
+                f"Does this time work for you? Please select below:"
+            ),
+            "ar": (
+                f"🔔 <b>زيارة مجدولة</b>\n\n"
+                f"مرحباً {patient.name}، من المقرر أن يقوم منسق الرعاية الخاص بك <b>{cname}</b> بزيارتك يوم <b>{target_date}</b> في تمام الساعة <b>{time_slot}</b>.\n\n"
+                f"هل يناسبك هذا الوقت؟ يرجى الاختيار أدناه:"
+            ),
+            "ml": (
+                f"🔔 <b>കെയർ സന്ദർശനം</b>\n\n"
+                f"ഹലോ {patient.name}, നിങ്ങളുടെ കെയർ കോർഡിനേറ്റർ <b>{cname}</b> {target_date}-ൽ <b>{time_slot}</b>-ന് നിങ്ങളെ സന്ദർശിക്കാൻ വരുന്നുണ്ട്.\n\n"
+                f"ഈ സമയം നിങ്ങൾക്ക് സൗകര്യപ്രദമാണോ? താഴെ തിരഞ്ഞെടുക്കുക:"
+            ),
+        }
+
+        yes_btn = {"en": "✅ Yes", "ar": "✅ نعم", "ml": "✅ അതേ"}
+        no_btn = {"en": "❌ No", "ar": "❌ لا", "ml": "❌ അല്ല"}
+
+        reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": yes_btn.get(lang, yes_btn["en"]), "callback_data": f"visit:yes:{db_visit.id}"},
+                    {"text": no_btn.get(lang, no_btn["en"]), "callback_data": f"visit:no:{db_visit.id}"}
+                ]
+            ]
+        }
+        msg = patient_messages.get(lang, patient_messages["en"])
+        await send_telegram_message(patient.telegram_chat_id, msg, reply_markup=reply_markup)
+
+    # Notify coordinator
+    if db_visit.coordinator_id:
+        coordinator = db.query(User).filter(User.id == db_visit.coordinator_id).first()
+        if coordinator and coordinator.telegram_chat_id:
+            pname = patient.name if patient else "Patient"
+            coord_msg = (
+                f"📋 <b>New Visit Scheduled Individually</b>\n\n"
+                f"Visit for <b>{pname}</b> has been scheduled for <b>{target_date} at {db_visit.time_slot or 'today'}</b>.\n"
+                f"Priority: {db_visit.priority}\n"
+                f"Reason: {db_visit.reason or 'None'}"
+            )
+            await send_telegram_message(coordinator.telegram_chat_id, coord_msg)
+
+    return db_visit

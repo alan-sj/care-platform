@@ -288,7 +288,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
                             await send_telegram_message(coordinator.telegram_chat_id, coord_msg)
                     else:
                         # Mark as cancelled
-                        visit.status = "cancelled"
+                        visit.status = "cancelled_by_patient"
                         db.commit()
 
                         feedback_messages = {
@@ -337,91 +337,7 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
             )
             return {"status": "ok"}
 
-        # ── Route: Visit Rescheduling Check ────────────────────────────────────
-        from app.models.models import User
-        from datetime import timedelta
-        
-        # Check if there is an active planned visit today
-        visit = db.query(VisitSchedule).filter(
-            VisitSchedule.patient_id == patient.id,
-            VisitSchedule.schedule_date == date.today(),
-            VisitSchedule.status == "planned",
-        ).first()
-
-        if visit:
-            from app.agents.reschedule_agent import interpret_reschedule_request
-            coordinator = db.query(User).filter(User.id == visit.coordinator_id).first()
-            cname = coordinator.name if coordinator else "your coordinator"
-            
-            res_result = await interpret_reschedule_request(
-                patient_name=patient.name,
-                coordinator_name=cname,
-                visit_time=visit.time_slot or "12:00",
-                visit_date=str(visit.schedule_date),
-                message=text,
-                patient_id=patient.id,
-            )
-
-            if res_result.get("is_reschedule_request"):
-                requested_time = res_result.get("requested_time")
-                requested_date = res_result.get("requested_date")
-                
-                # Check coordinator convenience / availability
-                # A coordinator is busy if they already have another visit scheduled at that date + time
-                has_conflict = False
-                target_date = visit.schedule_date
-                
-                if requested_date:
-                    from datetime import datetime
-                    try:
-                        if requested_date == "tomorrow":
-                            target_date = date.today() + timedelta(days=1)
-                        else:
-                            target_date = datetime.strptime(requested_date, "%Y-%m-%d").date()
-                    except Exception:
-                        pass
-                
-                time_to_check = requested_time or visit.time_slot
-                if time_to_check and visit.coordinator_id:
-                    conflict = db.query(VisitSchedule).filter(
-                        VisitSchedule.coordinator_id == visit.coordinator_id,
-                        VisitSchedule.schedule_date == target_date,
-                        VisitSchedule.time_slot == time_to_check,
-                        VisitSchedule.status == "planned",
-                        VisitSchedule.id != visit.id,
-                    ).first()
-                    if conflict:
-                        has_conflict = True
-
-                if has_conflict:
-                    lang = patient.language.value if patient.language else "en"
-                    conflict_replies = {
-                        "en": f"Sorry {patient.name}, {cname} is not available at {time_to_check} on {target_date}. Would another time work? 😊",
-                        "ar": f"عذراً {patient.name}، {cname} ليس متاحاً في {time_to_check} يوم {target_date}. هل يناسبك وقت آخر؟ 😊",
-                        "ml": f"ക്ഷമിക്കണം {patient.name}, {cname}-ന് {target_date}-ൽ {time_to_check}-ന് വരാൻ കഴിയില്ല. മറ്റൊരു സമയം പറയാമോ? 😊"
-                    }
-                    await send_telegram_message(chat_id, conflict_replies.get(lang, conflict_replies["en"]))
-                    return {"status": "ok"}
-                else:
-                    # Update the visit details in the database
-                    if requested_time:
-                        visit.time_slot = requested_time
-                    if requested_date:
-                        visit.schedule_date = target_date
-                    db.commit()
-
-                    # Notify patient
-                    await send_telegram_message(chat_id, res_result["reply"])
-
-                    # Notify coordinator on Telegram
-                    if coordinator and coordinator.telegram_chat_id:
-                        coord_msg = (
-                            f"🔔 <b>Visit Rescheduled by Patient</b>\n\n"
-                            f"The visit for <b>{patient.name}</b> has been rescheduled to <b>{target_date} at {visit.time_slot}</b>."
-                        )
-                        await send_telegram_message(coordinator.telegram_chat_id, coord_msg)
-
-                    return {"status": "ok"}
+        # (Rescheduling agent check bypassed — keeping button confirm/cancel flow only)
 
         # Route: wellness check-in response
         if _has_pending_wellness(patient.id, db):

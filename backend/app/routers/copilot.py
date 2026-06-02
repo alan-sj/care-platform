@@ -349,10 +349,20 @@ async def submit_visit_note(
     # ── Mark visit schedule as completed if one exists ────────────────────────
     try:
         from app.routers.scheduling import VisitSchedule
+        
+        # Parse the visit date extracted by Copilot (default to today if missing or invalid)
+        visit_date_str = result.get("visit_date")
+        target_date = date.today()
+        if visit_date_str:
+            try:
+                target_date = datetime.strptime(visit_date_str, "%Y-%m-%d").date()
+            except Exception:
+                pass
+                
         today_visit = db.query(VisitSchedule).filter(
             VisitSchedule.patient_id     == patient_id,
-            VisitSchedule.schedule_date  == date.today(),
-            VisitSchedule.status         == "planned",
+            VisitSchedule.schedule_date  == target_date,
+            VisitSchedule.status.in_(["planned", "confirmed"]),
         ).first()
         if today_visit:
             today_visit.status = "completed"

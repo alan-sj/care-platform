@@ -11,3 +11,6 @@ export const getCoordinatorWorkload = () =>
 
 export const updateVisitStatus = (visitId, status, notes = null) =>
   client.patch(`/scheduling/visit/${visitId}`, { status, notes })
+
+export const createIndividualVisit = (visitData) =>
+  client.post('/scheduling/visit', visitData)

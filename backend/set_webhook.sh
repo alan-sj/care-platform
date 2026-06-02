@@ -5,4 +5,4 @@ SECRET="CarePlatformSecureToken2026"
 
 curl -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
   -H "Content-Type: application/json" \
-  -d "{\"url\": \"${CLOUDFLARE_URL}/webhooks/telegram\", \"secret_token\": \"${SECRET}\"}"
+  -d "{\"url\": \"${CLOUDFLARE_URL}/api/webhooks/telegram\", \"secret_token\": \"${SECRET}\"}"
