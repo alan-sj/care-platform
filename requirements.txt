@@ -1,0 +1,29 @@
+# Web framework
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+
+# Database
+sqlalchemy==2.0.49
+psycopg2-binary==2.9.12
+
+# Pydantic / validation
+pydantic[email]==2.13.4
+email-validator==2.3.0
+
+# HTTP client
+httpx==0.28.1
+
+# Environment
+python-dotenv==1.2.2
+python-multipart==0.0.29
+
+# Timezone
+pytz==2026.2
+
+# ── Google Agent Development Kit (replaces google-genai direct calls) ─────────
+# ADK 2.x bundles the Gemini SDK and agent orchestration framework.
+# Pin to a known-good release; bump as needed.
+google-adk>=2.0.0
+
+# Optional: structured outputs / validation helpers used by ADK tools
+typing-extensions>=4.12

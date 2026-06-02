@@ -1,6 +1,7 @@
 ---
 title: care-platform-v2
-sdk: docker
+sdk: gradio
+app_file: run.py
 emoji: 🚀
 colorFrom: blue
 colorTo: green
