@@ -51,7 +51,6 @@ class VisitNote(Base):
 
 
 from app.database import engine
-Base.metadata.create_all(bind=engine, tables=[VisitNote.__table__])
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────

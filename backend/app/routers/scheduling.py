@@ -44,8 +44,6 @@ class VisitSchedule(Base):
 
 
 from app.database import engine
-# Only create if not exists — safe to call multiple times
-Base.metadata.create_all(bind=engine, tables=[VisitSchedule.__table__])
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
